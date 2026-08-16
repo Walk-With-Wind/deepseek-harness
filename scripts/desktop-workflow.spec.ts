@@ -198,11 +198,16 @@ describe('Desktop CI workflow', () => {
 
   it('最终 maker 产物按平台安装、运行、卸载、重装并再次运行', () => {
     const installer = readFileSync(resolve(root, 'scripts/desktop-installer-smoke.mjs'), 'utf8')
+    for (const name of ['unsigned-native', 'signed-release']) {
+      expect((jobs()[name]!.env as Record<string, string>).NODE_OPTIONS)
+        .toBe('--max-old-space-size=5120')
+    }
     expect(installer).toContain("process.env.CI !== 'true'")
     expect(installer).toContain("'hdiutil', ['attach'")
     expect(installer).toContain("setup, ['--silent']")
     expect(installer).toContain("'apt-get', 'install'")
     expect(installer).toContain("'rpm', '-i'")
+    expect(installer).toContain("'/usr/share/pixmaps/deepseek-harness.png'")
     expect(installer).toContain("['--uninstall', '-s']")
     expect(installer).toContain('exerciseInstallerLifecycle')
     expect(installer).toContain('runReinstalledSmoke')

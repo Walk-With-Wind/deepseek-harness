@@ -42,28 +42,51 @@ function electronExecutablePath(buildPath: string, platform: string): string {
   return join(basePath, platform === 'win32' ? 'electron.exe' : 'electron')
 }
 
-function requiredSigningValue(name: string): string {
-  const value = process.env[name]
+function requiredSigningValue(environment: NodeJS.ProcessEnv, name: string): string {
+  const value = environment[name]
   if (value === undefined || value === '') {
     throw new Error(`Desktop 签名已启用，但受保护环境缺少 ${name}`)
   }
   return value
 }
 
-const macSigning = signingEnabled && process.platform === 'darwin'
-  ? {
+/**
+ * 解析 macOS 完整应用签名配置；无发行证书时使用临时签名保证原生更新器可读取应用身份。
+ * @param environment - 当前构建环境变量。
+ * @param productionSigningEnabled - 是否启用发行签名与公证。
+ * @returns Electron Packager 的 macOS 签名配置。
+ */
+export function resolveMacSigningConfig(
+  environment: NodeJS.ProcessEnv,
+  productionSigningEnabled: boolean,
+) {
+  if (!productionSigningEnabled) {
+    return {
       osxSign: {
-        identity: requiredSigningValue('DSH_MAC_SIGN_IDENTITY'),
-        hardenedRuntime: true,
-        entitlements: resolve(assets, 'entitlements.mac.plist'),
-        entitlementsInherit: resolve(assets, 'entitlements.mac.inherit.plist'),
-      },
-      osxNotarize: {
-        appleApiKey: requiredSigningValue('DSH_APPLE_API_KEY_PATH'),
-        appleApiKeyId: requiredSigningValue('DSH_APPLE_API_KEY_ID'),
-        appleApiIssuer: requiredSigningValue('DSH_APPLE_API_ISSUER'),
+        identity: '-',
+        identityValidation: false,
+        hardenedRuntime: false,
+        timestamp: 'none',
       },
     }
+  }
+  return {
+    osxSign: {
+      identity: requiredSigningValue(environment, 'DSH_MAC_SIGN_IDENTITY'),
+      hardenedRuntime: true,
+      entitlements: resolve(assets, 'entitlements.mac.plist'),
+      entitlementsInherit: resolve(assets, 'entitlements.mac.inherit.plist'),
+    },
+    osxNotarize: {
+      appleApiKey: requiredSigningValue(environment, 'DSH_APPLE_API_KEY_PATH'),
+      appleApiKeyId: requiredSigningValue(environment, 'DSH_APPLE_API_KEY_ID'),
+      appleApiIssuer: requiredSigningValue(environment, 'DSH_APPLE_API_ISSUER'),
+    },
+  }
+}
+
+const macSigning = process.platform === 'darwin'
+  ? resolveMacSigningConfig(process.env, signingEnabled)
   : {}
 
 /** Windows 只选择 PFX 或受保护签名服务参数之一，避免互相覆盖。 */

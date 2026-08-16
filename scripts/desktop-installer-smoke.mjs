@@ -19,6 +19,7 @@ const installedDataSmokeScript = join(root, 'scripts', 'desktop-installed-data-s
 const appRequire = createRequire(join(root, 'apps', 'desktop', 'package.json'))
 const electronExecutable = appRequire('electron')
 const temporary = mkdtempSync(join(tmpdir(), 'dsh-desktop-installer-smoke-'))
+const linuxDesktopIcon = '/usr/share/pixmaps/deepseek-harness.png'
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { stdio: 'inherit', ...options })
@@ -221,8 +222,9 @@ function assertLinuxDesktopIntegration() {
   if (!existsSync('/usr/share/applications/deepseek-harness.desktop')) {
     throw new Error('desktop-installer-smoke: Linux 安装缺少 desktop entry')
   }
-  const icons = collectFiles('/usr/share/icons').filter(path => path.includes('deepseek-harness'))
-  if (icons.length === 0) throw new Error('desktop-installer-smoke: Linux 安装缺少应用图标')
+  if (!existsSync(linuxDesktopIcon)) {
+    throw new Error('desktop-installer-smoke: Linux 安装缺少应用图标')
+  }
 }
 
 /** 验证 Linux 包卸载后不再保留用户可启动的桌面集成文件。 */
@@ -233,8 +235,9 @@ function assertLinuxDesktopIntegrationRemoved() {
   if (existsSync('/usr/share/applications/deepseek-harness.desktop')) {
     throw new Error('desktop-installer-smoke: Linux 卸载后 desktop entry 仍存在')
   }
-  const icons = collectFiles('/usr/share/icons').filter(path => path.includes('deepseek-harness'))
-  if (icons.length > 0) throw new Error('desktop-installer-smoke: Linux 卸载后应用图标仍存在')
+  if (existsSync(linuxDesktopIcon)) {
+    throw new Error('desktop-installer-smoke: Linux 卸载后应用图标仍存在')
+  }
 }
 
 /**

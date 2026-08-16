@@ -64,6 +64,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
+      NODE_OPTIONS: '--max-old-space-size=5120'
       DSH_DESKTOP_FAULT_ACCEPTANCE: '1'
       DSH_DESKTOP_CIRCUIT_ACCEPTANCE: '1'
       DSH_DESKTOP_RENDERER_CIRCUIT_ACCEPTANCE: '1'
@@ -151,6 +152,7 @@ jobs:
             platform: linux
             arch: x64
     env:
+      NODE_OPTIONS: '--max-old-space-size=5120'
       DSH_DESKTOP_SIGNING: ${{ matrix.platform == 'linux' && '0' || '1' }}
       DSH_MAC_SIGN_IDENTITY: ${{ secrets.DSH_MAC_SIGN_IDENTITY }}
       DSH_APPLE_API_KEY_ID: ${{ secrets.DSH_APPLE_API_KEY_ID }}

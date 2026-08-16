@@ -2,7 +2,11 @@ import { FuseV1Options } from '@electron/fuses'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import config, { desktopFuseConfig, resolveWindowsSigningConfig } from '../forge.config.ts'
+import config, {
+  desktopFuseConfig,
+  resolveMacSigningConfig,
+  resolveWindowsSigningConfig,
+} from '../forge.config.ts'
 
 describe('Desktop Forge config', () => {
   it('启用 ASAR、原生解包与全部安全 fuse', () => {
@@ -70,5 +74,30 @@ describe('Desktop Forge config', () => {
       DSH_WINDOWS_CERTIFICATE_PASSWORD: 'secret',
     })).toEqual({ certificateFile: 'certificate.pfx', certificatePassword: 'secret' })
     expect(() => resolveWindowsSigningConfig({})).toThrow(/必须提供/)
+  })
+
+  it('macOS 未配置发行证书时仍对完整应用执行临时签名', () => {
+    expect(resolveMacSigningConfig({}, false)).toEqual({
+      osxSign: {
+        identity: '-',
+        identityValidation: false,
+        hardenedRuntime: false,
+        timestamp: 'none',
+      },
+    })
+    expect(() => resolveMacSigningConfig({}, true)).toThrow(/DSH_MAC_SIGN_IDENTITY/)
+    expect(resolveMacSigningConfig({
+      DSH_MAC_SIGN_IDENTITY: 'Developer ID Application: Test',
+      DSH_APPLE_API_KEY_PATH: '/tmp/AuthKey_TEST.p8',
+      DSH_APPLE_API_KEY_ID: 'TEST',
+      DSH_APPLE_API_ISSUER: 'issuer',
+    }, true)).toMatchObject({
+      osxSign: { identity: 'Developer ID Application: Test', hardenedRuntime: true },
+      osxNotarize: {
+        appleApiKey: '/tmp/AuthKey_TEST.p8',
+        appleApiKeyId: 'TEST',
+        appleApiIssuer: 'issuer',
+      },
+    })
   })
 })
