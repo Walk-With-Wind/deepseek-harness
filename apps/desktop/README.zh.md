@@ -34,7 +34,7 @@ pnpm run verify:desktop-materials
 
 `test:desktop:packaged` 验证未安装 packaged application。其 Utility 持有 Host 租约期间，smoke 会启动第二份 packaged Desktop，要求它完成单实例交接后正常退出且首实例保持存活；还会让真实 headless CLI 与 Web profile 争用同一 home，要求二者都在挂载插件前以租约冲突退出，并验证全部竞争前后的会话、Workspace storage、附件、设置与凭据字节均未变化。`test:desktop:installer` 只允许在一次性 CI runner 上运行，会安装真实 `.dmg`、Squirrel、`.deb` 或 `.rpm`，检查离线启动、最终进程树、无监听端口、沙箱 Renderer 启动、Utility／Renderer 恢复、Utility 连续失败后打开熔断、强制终止 Main 后使用同一 home 恢复、quiescent 关停和原生模块实际加载。随后它卸载并验证应用已移除，重装同一 maker 产物，再次执行 packaged 启动 smoke，最后完成卸载与清理。共享 lane 测量请求和响应均为 1 KiB 的 unary IPC 额外 p95 往返开销。macOS lane 只篡改一次性应用副本，重新进行 ad-hoc 签名，并要求 ASAR integrity 拒绝启动。受保护矩阵通过已安装的 Renderer／Preload／Main／Utility 进程链各执行一次取消和成功的 1 GiB 导出，并记录 Utility RSS。所有签名目标成功后，独立四目标矩阵会下载并安装每个已签名产物，运行 60 分钟流式响应／取消，替换 Renderer 窗口以轮换真实 `MessagePort` 连接，并要求 Utility 资源计数回到基线。[Desktop 发行 runbook](../../docs/cookbook/releasing-desktop.md#4-exercise-install-and-update-paths)负责最终安装 GUI 的验收记录。
 
-Desktop 发行构建必须在对应目标原生执行：macOS arm64、macOS x64、Windows x64 和 Linux x64。除非设置 `DSH_DESKTOP_SIGNING=1`，否则不启用签名；受保护 CI 环境提供平台凭据，`DSH_DESKTOP_REQUIRE_SIGNING=1` 会让产物验证拒绝未签名的 macOS 或 Windows 产品。[发行 cookbook](../../docs/cookbook/releasing-desktop.md)负责凭据名称与发布顺序。
+Desktop 发行构建必须在对应目标原生执行：macOS arm64、macOS x64、Windows x64 和 Linux x64。macOS 调查构建使用临时 ad-hoc 签名，以便原生 updater 能在 fuse 修改后读取应用 bundle 身份；该签名不提供发行身份。设置 `DSH_DESKTOP_SIGNING=1` 后，macOS 使用 Developer ID 签名与公证，Windows 使用受信 Authenticode 签名。受保护 CI 环境提供平台凭据，`DSH_DESKTOP_REQUIRE_SIGNING=1` 会让产物验证拒绝缺少所需发行签名的产品。[发行 cookbook](../../docs/cookbook/releasing-desktop.md)负责凭据名称与发布顺序。
 
 ## 运行时与故障行为
 
