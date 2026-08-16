@@ -516,10 +516,17 @@ const SERVICE_ROLES: ServiceRole[] = [
   {
     key: 'clientModules',
     pkg: 'modules',
-    title: 'Client plugin graph host',
+    title: 'GUI client module registry',
     mode: 'core',
     consumers: ['hmr'],
-    note: 'Composes the __DSH_BOOT__ entry graph from an incremental dsh.client scan, serves plugin bundles, and notifies rebuilt/graph-changed subscribers.',
+    note: 'Composes the __DSH_BOOT__ graph and strict resource manifest from an incremental dsh.client scan; product adapters expose those resources, while HMR consumes rebuild notifications.',
+  },
+  {
+    key: 'hostLease',
+    pkg: 'app-boot',
+    title: 'Exclusive Host-home owner',
+    mode: 'core',
+    note: 'Canonicalizes one Harness home, proves exclusive cross-product ownership with a platform endpoint, and releases that endpoint under the root Cordis lifecycle.',
   },
   {
     key: 'workflowEngine',
@@ -704,7 +711,7 @@ const APP_EXAMPLES = [
     title: 'DSH Base Composition',
     label: 'packages/bundle/base/cordis.patch.yml',
     config: 'packages/bundle/base/cordis.patch.yml',
-    summary: 'The dsh-base bundle patch every profile applies first; mode bundles (dsh-web-app, dsh-headless) and the user\'s profile layer patch over it.',
+    summary: 'The dsh-base bundle patch every profile applies first; GUI profiles add dsh-gui-app before their product transport, while headless and user layers patch the same base.',
   },
   {
     id: 'headless',

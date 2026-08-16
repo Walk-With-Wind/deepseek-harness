@@ -22,7 +22,7 @@ A **bundle** is a distribution format for Cordis config rows and the code they m
 
 Each declares itself in its own `package.json` under a `dsh` field: `dsh.profile` lists a profile's bundles, and `dsh.bundle` points at a bundle's patch file.
 
-[`dsh-base`](../packages/bundle/base/README.md) is the first layer of every profile: model adapters, tools, persistence, sandbox and approval policy, settings, credentials, telemetry. [`dsh-web-app`](../packages/bundle/web-app/README.md) adds the browser application; [`dsh-headless`](../packages/bundle/headless/README.md) adds a one-shot runner with no server at all.
+[`dsh-base`](../packages/bundle/base/README.md) is the first layer of every profile: model adapters, tools, persistence, sandbox and approval policy, settings, credentials, telemetry. GUI products then apply [`dsh-gui-app`](../packages/bundle/gui-app/README.md) for their shared Host capabilities and client roster, followed by a product transport such as [`dsh-web-app`](../packages/bundle/web-app/README.md). [`dsh-headless`](../packages/bundle/headless/README.md) instead adds a one-shot runner directly over base, with no Host or GUI layer.
 
 Layers apply to an empty entry list in this order: each bundle in the profile's listed order, then the profile's `cordis.patch.yml`, then the home-level one, then any `--patch` overlay. A patch targets a row by id and replaces its whole config, or inserts new rows.
 
@@ -35,6 +35,24 @@ dsh --profile web --dump-config
 Any row it prints can be replaced by a patch of your own.
 
 Composition mechanics are in [app-boot](../packages/boot/app-boot/README.md#profiles); config fields are in the generated [config catalog](config-catalog.md).
+
+## GUI products and carriers
+
+The shared GUI composition stops at logical Host APIs and a client module manifest. `dsh-gui-app` owns that composition once. A product supplies a `ClientCarrier`, module-resource delivery, platform capabilities, and lifecycle policy without branching inside client plugins. Web maps Fetch and downlink streams to HTTP/WebSocket. Desktop maps the same envelopes to generation-scoped `MessagePort` channels and serves packaged modules through `app://`; neither carrier changes business handlers or session semantics.
+
+```mermaid
+flowchart LR
+  GUI["dsh-gui-app<br/>Host services + client roster"] --> Dispatch["transport-neutral Host dispatch"]
+  Dispatch --> Web["Web carrier<br/>HTTP + WebSocket"]
+  Dispatch --> Utility["Desktop Utility<br/>IPC carrier + Host lease"]
+  Utility --> Main["Desktop Main<br/>native policy + supervisor"]
+  Main --> Preload["Preload<br/>validated narrow bridge"]
+  Preload --> Renderer["sandboxed Renderer<br/>shared AppGuiEntry"]
+```
+
+Desktop treats Electron's four execution roles as separate authorities. Main owns native policy and process supervision but does not parse business bodies. Utility owns the Harness Host, storage, plugins, and the exclusive canonical-home lease. Preload validates and narrows the Renderer bridge. Renderer owns presentation only, with sandbox and context isolation enabled and Node integration disabled. Utility readiness requires the profile, resource manifest, and lease; Renderer readiness additionally requires one unary Host description and both event streams to open through the generation-bound data port. Shutdown becomes clean only after Utility reports quiescence. Crashes create a new transport generation, so stale windows and ports cannot affect the replacement Host.
+
+The [Desktop application README](../apps/desktop/README.md) owns build and runtime details; the [shared GUI and carrier decision](../.agents/notes/implemented/architecture/2026-08-16-shared-gui-composition-and-explicit-carrier.md) owns the layering rationale.
 
 ## Core packages
 

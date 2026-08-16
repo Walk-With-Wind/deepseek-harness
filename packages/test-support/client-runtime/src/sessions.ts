@@ -1,6 +1,6 @@
 /** Test-owned sessions face: the SlotRegistry host contract over declarative fixtures. */
 import type { Context } from '@deepseek-ai/cordis'
-import type { AttachmentIdType } from '@deepseek-ai/dsh-attachment'
+import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { createScope, scopeOf, SessionProvideChannel } from '@deepseek-ai/dsh-client-runtime/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import type {
@@ -90,11 +90,19 @@ export class FixtureSession implements SessionFace {
   }
 
   /**
+   * 未声明二进制附件行为时立即失败，避免测试夹具静默回退到旧 Prompt 路径。
+   * @returns 永不返回；始终抛出错误。
+   */
+  promptUpload(): never {
+    throw new Error(`test session "${this.sessionId}": promptUpload is not stubbed — supply it on the fixture's session face`)
+  }
+
+  /**
    * Fail-loud stub; supply `readAttachment` on the fixture's session face to exercise it.
-   * @param _attachmentId - opaque durable attachment id.
+   * @param _attachment - Host 日志投影返回的附件引用。
    * @returns never — always throws.
    */
-  readAttachment(_attachmentId: AttachmentIdType): never {
+  readAttachment(_attachment: ImageAttachmentRef): never {
     throw new Error(`test session "${this.sessionId}": readAttachment is not stubbed — supply it on the fixture's session face`)
   }
 

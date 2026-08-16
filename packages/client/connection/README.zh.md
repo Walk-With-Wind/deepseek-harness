@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-协议消费层：客户端插件的 apply 会挂载 `ctx.connection`（共享 API 客户端 + 当前页面的 loopback 状态 + 可观察且按 generation 生效的 `hostDescription` + 单消费方流循环启动器）；导出表层携带协议约定类型、`AbstractApiClient` 抽象，以及循环的 sink／配置类型。每次就绪握手成功后，都会在 `onConnected` 之前发布完整的 `host.describe` 值；generation 失效或显式 stop 会清空它，因此原生能力消费者不会保留已经断线的判断。浏览器载体以 HTTP POST 发送 unary／respond，并为 `events.mux` 与 `events.host` 各开一条只下行的 WebSocket；进程内载体满足同一双流抽象。Host half 持有唯一 `/api` route 及其 Fetch bridge；已注册的 Typert interceptor 会先认领自己的 Remote endpoint，未认领请求再回退 API Proxy。Loopback hostname 判定逻辑留在包内部：`/api` Host fence 与 WebSocket upgrade 会直接使用它，其他客户端插件则消费派生的 `ctx.connection.isLoopback` 状态。node 半侧的 `/api` 路由让特权方法集（`host.pickDirectory`、`host.openPath`，以及整个配置面——`settings.describe`/`openDocument`/`update`/`replace`/`mutate` 与 `credentials.describe`/`set`/`unset`；读取与原生操作也在内，因为 describe 会返回已暴露的配置、打开操作会作用于 Host 桌面，而探测任意引用会报出某条凭据来自何处——以及 agent（智能体） preset 的创作面 `agentPreset.read`/`copy`/`openDocument`/`remove`，因为组装指明了一个会话所运行的插件，读取它是侦察，而 copy/remove/openDocument 管理名单并驱动宿主桌面（创作只有复制一种写入，因此这些方法都不接收组装文本或路径）；`agentPreset.list` 与 `agentPreset.select` 不在其中——名单只携带 id 与信任级别，而选择一个 preset 并不比 `session.create` 自带的 `agentPreset` 多给任何能力，何况默认 preset 本就带着 bash）以空信任表过信任 fence，从而钉在回环——已声明的 `trustedHosts` 授权可达其余全部方法，而这些方法在真正的认证层出现之前仍只限回环本机。平台载体与 ConnectionController 循环属于包内部；apply 负责选择并驱动它们。下行边界见 [WebSocket 下行载体 Agent Note](../../../.agents/notes/implemented/architecture/2026-08-04-websocket-downlink-carrier.md)。
+协议消费层：客户端插件注入产品选定的 `ctx.clientCarrier`，并挂载 `ctx.connection`（共享 API 客户端 + 载体权限来源 + 可观察且按 generation 生效的 `hostDescription` + 单消费方流循环启动器）。`ClientCarrier` 暴露逻辑基址、Fetch 语义、两条按完整信封分片的字节下行、权限来源与异步关闭，且不导入 Web 或 Electron 类型。`CarrierApiClient` 保留共享 API 信封／schema 行为；`createConnectionRpc` 接收载体的显式 Fetch 实现。`WebClientCarrier` 是浏览器适配器，使用 HTTP POST，并为 `events.mux` 与 `events.host` 各建立一条只下行 WebSocket；其权限来源与基址在创建时固定。每次就绪握手都会在 `onConnected` 前发布完整 `host.describe`，generation 失效或停止时清空。Host half 继续持有 `/api` 路由、Fetch bridge、Web 信任栅栏与 WebSocket upgrade；已注册的 Typert interceptor 会在 API Proxy 回退前认领自己的 Remote endpoint。特权方法信任策略与 [WebSocket 下行决策](../../../.agents/notes/implemented/architecture/2026-08-04-websocket-downlink-carrier.md)保持不变。
 
 ## /api 浏览器信任栅栏
 
@@ -11,6 +11,12 @@ node 半侧在桥接或 upgrade 前守卫 `/api` 下的每个入口（`src/api-r
 ## `/api` WebSocket 下行
 
 `/api/events.mux` 与 `/api/events.host` 各接受一条 WebSocket upgrade，并只向浏览器发送对应的 `ServerRequest` 文本消息；客户端不会在这些 socket 上发送业务数据。任一 socket 结束都会使当前 connection generation 失败并重建两条流，连接就绪仍要求两条 socket 均已打开且 `host.describe` HTTP 调用成功。Host teardown 会终止两条 socket、中止各自的 source，并等待 source 清理完成后再返回。普通网络 GET 这些路径会返回 426，不保留 SSE（Server-Sent Events）回退；`toFetchHandler` 的 SSE 编解码只服务进程内同构载体。
+
+## Desktop IPC 载体
+
+`IpcClientCarrier` 与 `IpcHostBridge` 在一条绑定 generation 的 `MessagePort` 上运行同一套 Fetch 形态协议，不打开网络 listener。闭合 frame 联合承载请求／响应元数据及 pull 驱动的正文分片；每个方向只允许一个未完成 pull 和至多一个 1 MiB 在途分片，双向传播取消与物理端口关闭，并拒绝旧 generation 流量。Renderer 载体会在结构化克隆前把上游小分片合并为 1 MiB frame，既限制驻留数据，也避免每个浏览器常见的 64 KiB 分片都产生一次跨进程复制。
+
+`IpcHostBridge.resourceSnapshot()` 只报告生命周期阶段和请求／reader 聚合计数。Desktop Utility 把这些值与 bridge 及原生操作计数聚合，供发行耐久门禁使用；两个 API 都不暴露请求 id、路由、路径或正文。
 
 ## 模型体验
 
@@ -23,4 +29,4 @@ node 半侧在桥接或 upgrade 前守卫 `/api` 下的每个入口（`src/api-r
 ## 已知限制与暂缓事项
 
 - **History 会恢复未附加的会话**：打开 history 可能创建宿主侧 agent，并增加首次打开的延迟；没有仅从持久化读取的路径。
-- **`/api` 桥把每个请求体整体缓冲在内存里**：`maxRequestBodyBytes`（默认 160 MiB，按默认 100 MiB 图片总量上限经 base64 膨胀加信封余量得出）因此同时是单请求的驻留内存上界；要降低它而不缩小图片限额，需要流式请求体路径。
+- **Web `/api` 桥把每个请求体整体缓冲在内存里**：`maxRequestBodyBytes`（默认 160 MiB，可容纳默认 100 MiB 原始图片总量与有界上传 Manifest）因此同时是单请求的驻留内存上界。Desktop IPC 不具有该整体缓冲行为；若要进一步降低 Web 驻留内存，需要流式 `node:http` bridge。

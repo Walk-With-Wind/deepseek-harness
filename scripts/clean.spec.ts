@@ -74,6 +74,18 @@ describe('RepositoryCleaner', () => {
     expect(existsSync(join(root, 'native/landlock-run/tsconfig.tsbuildinfo'))).toBe(false)
   })
 
+  it('removes the shared lib root for a named compiler face', async () => {
+    const root = fixture()
+    addProject(root, 'products/desktop', 'lib/types-client')
+    write(join(root, 'products/desktop/lib/types-client/index.js'))
+    write(join(root, 'products/desktop/lib/main.js'))
+
+    await new RepositoryCleaner(root).clean()
+
+    expect(existsSync(join(root, 'products/desktop/lib'))).toBe(false)
+    expect(existsSync(join(root, 'products/desktop/src/index.ts'))).toBe(true)
+  })
+
   it('refuses project outputs reached through a symlink outside the repository', async () => {
     const root = fixture()
     const externalProject = fixture()

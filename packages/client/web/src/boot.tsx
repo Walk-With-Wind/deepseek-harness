@@ -1,40 +1,16 @@
 /**
- * Web shell boot kernel — the face consumed by the apps/web entry. Everything
- * here is machinery that cannot itself be a loader entry, and none of it
- * value-imports a plugin package (shell self-sufficiency rule: the
- * loading page must work while — especially when — plugins fail). The one
- * sanctioned exception is the modules package (bootstrap
- * identity): the module system cannot arrive through itself, so its class
- * and its client-half wrapper are shell-bundled and the kernel adopts its
- * plugin entry once cordis is up.
+ * GUI 外壳启动内核。`AppGuiEntry` 显式接收启动清单、客户端载体、bundle loader
+ * 与平台能力，不读取 Web origin 或 Electron 全局对象。`AppWebEntry` 只是兼容包装层：
+ * 解析 `window.__DSH_BOOT__` 并提供浏览器载体。
  *
- * AppWebEntry.run(), module face first, then plugin face: parse
- * `window.__DSH_BOOT__` into the two-view BootManifest (wire boundary)
- * → build the module system over the module-view rows → render the loading
- * page → prefetch every `immediately` row in parallel with mounting the
- * vendored cordis Loader (`internal` contract injection BEFORE any entry exists —
- * the bare-import fallback in tree.import must never run in a browser) →
- * await the prefetch tier, THEN adopt the modules entry and create one
- * loader entry per plugin-view row plus the shell-own app-shell assembly
- * entry → loader.await() + a full fiber sweep (all ACTIVE, else fail
- * listing who/what/which service) → flip the settled signal so AppRoot
- * switches to the real UI in one pass.
- *
- * Entry creation waits for the whole immediately tier: materialization runs
- * synchronous cross-package require edges (e.g. locale → runtime/client) that
- * fiber inject waiting cannot protect — a bundle's factory must be
- * registered before any dependent entry materializes. Per-row prefetch
- * failures still resolve silently (the create-side import reloads and
- * owns the loud failure), so the barrier never turns one bad bundle into a
- * boot-wide fail-fast.
- *
- * Composition lives in the host graph; the shell makes zero composition
- * decisions (the app-shell assembly is itself a graph entry, the only
- * shell-own module registered with the module system).
+ * 创建条目前会等待全部立即加载模块完成物化，因为跨包同步依赖不能依靠 fiber 注入等待保护。
+ * 单个预取失败由后续导入路径重新加载并明确报告，避免一个失败遮蔽其他模块的诊断。
+ * 组合关系由 Host 图决定；外壳只静态注册自身的 app-shell 组装条目。
  */
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import { createRoot, type Root } from 'react-dom/client'
+import { WebClientCarrier, type ClientCarrier } from '@deepseek-ai/dsh-client-connection/client'
 import * as ModulesClient from '@deepseek-ai/dsh-client-modules/client'
 import {
   ClientModuleSystem, parseBootManifest,
@@ -47,58 +23,104 @@ import { getStaticModules } from './seed.ts'
 import { STATE_LABELS, createLoaderStatusStore, createSignal } from './loader-status.ts'
 import './base.css'
 
-/** Module transport hook the shell passes through (jsdom tests replace the <script> path). */
+/** 模块传输钩子；jsdom 测试用它替换 `<script>` 路径。 */
 export type BootSeams = Pick<ClientModuleSystemOptions, 'loadBundle'>
 
-/**
- * The modules package's own graph row id. The kernel adopts that entry
- * itself (its wrapper is statically registered — shell-bundled code, never
- * fetched), so the plugin-row loop must skip it: the vendored Group.create
- * does not deduplicate by name, and a second fiber would provide 'modules'
- * twice.
- */
+/** GUI 产品在启动时提供的平台能力集合。 */
+export interface GuiPlatformCapabilities {
+  /** 当前产品载体类型，供能力 Provider 选择实现，不供业务组件分叉。 */
+  readonly kind: 'web' | 'desktop'
+}
+
+/** 产品外壳随 Renderer 一同编译、无需资源下载的私有客户端插件。 */
+export interface GuiStaticPlugin {
+  /** Loader entry 与模块表共用的稳定 id。 */
+  readonly id: string
+  /** 静态导入的插件模块。 */
+  readonly module: unknown
+  /** 仅用于启动图诊断的包级依赖边。 */
+  readonly inject?: readonly string[]
+  /** 是否加入第一阶段预取；静态模块预取是无 I/O 的 no-op。 */
+  readonly immediately?: boolean
+}
+
+/** 通用 GUI 入口的显式启动参数。 */
+export interface GuiBootOptions extends BootSeams {
+  /** 已在所属协议边界完成校验的客户端启动清单。 */
+  readonly manifest: BootManifest
+  /** 产品选择的客户端载体。 */
+  readonly carrier: ClientCarrier
+  /** 产品提供的平台能力。 */
+  readonly platformCapabilities: GuiPlatformCapabilities
+  /** 产品私有、由外壳静态注册的 provider 插件。 */
+  readonly staticPlugins?: readonly GuiStaticPlugin[]
+}
+
+/** 通用 GUI 启动的明确结算结果。 */
+export type GuiBootResult =
+  | { readonly outcome: 'ready' }
+  | { readonly outcome: 'failed'; readonly message: string }
+
+/** 模块系统自身的图条目 ID；外壳静态接管该条目，避免重复提供 `modules`。 */
 const MODULES_ID = '@deepseek-ai/dsh-client-modules'
+/** 外壳自有的启动依赖 Provider。 */
+const GUI_BOOTSTRAP_ID = '@deepseek-ai/dsh-client-gui-bootstrap'
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** 产品入口提供的 GUI 平台能力。 */
+    guiPlatform: GuiPlatformCapabilities
+  }
+}
+
+/** 创建捕获本次启动参数的外壳静态插件。 */
+function createGuiBootstrapModule(options: GuiBootOptions): object {
+  return {
+    name: 'gui-bootstrap',
+    apply(ctx: Context) {
+      ctx.provide('clientCarrier', options.carrier)
+      ctx.provide('guiPlatform', options.platformCapabilities)
+      return () => options.carrier.close()
+    },
+  }
+}
 
 /**
- * The web shell kernel: mounts the loading page into a DOM element and runs
- * the two-stage boot over the host graph. Fields hold only what must exist
- * before cordis does — the parsed manifest, the module system, and the
- * loading-page UI handles; everything else lives in plugins.
+ * GUI 外壳内核：把加载页挂载到 DOM，并按 Host 图执行两阶段启动。
+ * 字段只保存 Cordis 启动前必须存在的清单、模块系统与加载页状态，其余能力均由插件提供。
  */
-export class AppWebEntry {
+export class AppGuiEntry {
   private readonly el: HTMLElement
-  private readonly seams: BootSeams | undefined
+  private readonly options: GuiBootOptions
   private readonly status = createLoaderStatusStore()
   private readonly settled = createSignal(false)
   private readonly error = createSignal<string | undefined>(undefined)
-  // Assigned by run() before any private method or settled-gated closure reads them.
+  // `run()` 会在任何私有启动方法或稳定态回调读取前完成赋值。
   private ctx!: Context
   private modules!: ClientModuleSystem
-  private manifest!: BootManifest
+  private readonly manifest: BootManifest
   private root: Root | undefined
 
   /**
-   * Hold the mount point; all work happens in {@link run}.
-   * @param el - mount point (the app's #root).
-   * @param seams - Optional module transport overrides for test environments.
+   * 保存挂载点与显式启动参数；实际工作在 {@link run} 中执行。
+   * @param el - 应用挂载点。
+   * @param options - 启动清单、载体、bundle loader 与平台能力。
    */
-  constructor(el: HTMLElement, seams?: BootSeams) {
+  constructor(el: HTMLElement, options: GuiBootOptions) {
     this.el = el
-    this.seams = seams
+    this.options = options
+    this.manifest = withStaticPlugins(options.manifest, options.staticPlugins ?? [])
   }
 
   /**
-   * Run the boot chain to settlement. Boot-chain failures resolve (not
-   * reject): the loading page stays up and renders the failure report (the
-   * fail-loud surface the kernel owns). Rejects only when the boot manifest
-   * is missing or malformed — there is nothing to boot against.
-   * @returns resolves once the UI settled or the failure report rendered.
+   * 执行启动链直至稳定。启动链失败时保留加载页并呈现诊断；只有缺失或畸形清单会直接抛错。
+   * @returns UI 稳定或失败报告呈现完成后解决。
    */
-  async run(): Promise<void> {
-    this.manifest = parseBootManifest((globalThis as DshWindow).__DSH_BOOT__)
-
+  async run(): Promise<GuiBootResult> {
     this.modules = new ClientModuleSystem({
-      modules: this.manifest.modules, staticModules: getStaticModules(), ...this.seams,
+      modules: this.manifest.modules,
+      staticModules: getStaticModules(),
+      ...this.options.loadBundle === undefined ? {} : { loadBundle: this.options.loadBundle },
     })
     // The app-shell assembly is the only shell-own module: every other graph
     // row is a plugin bundle arriving through fetch.
@@ -109,6 +131,10 @@ export class AppWebEntry {
     // trigger a real fetch), and put the instance on the kernel slot the
     // wrapper's apply reads to provide ctx.modules.
     this.modules.registerStatic(MODULES_ID, ModulesClient)
+    this.modules.registerStatic(GUI_BOOTSTRAP_ID, createGuiBootstrapModule(this.options))
+    for (const plugin of this.options.staticPlugins ?? []) {
+      this.modules.registerStatic(plugin.id, plugin.module)
+    }
     ;(globalThis as DshWindow).__DSH_MODULES__ = this.modules
 
     this.root = createRoot(this.el)
@@ -120,7 +146,7 @@ export class AppWebEntry {
         renderApp={() => {
           const shell = this.ctx.get('appShell')
           // Unreachable after a clean settle (the app-shell entry is in every graph).
-          if (shell === undefined) throw new Error('web boot: appShell service missing after settled')
+          if (shell === undefined) throw new Error('gui boot: appShell service missing after settled')
           return shell.renderApp()
         }}
       />,
@@ -129,22 +155,28 @@ export class AppWebEntry {
     // The immediately tier prefetches in parallel with Loader mounting;
     // runPluginBoot awaits it before creating entries (see module comment:
     // cross-package synchronous require edges need every immediately-tier
-    // factory registered before any materialization).
     const prefetching = this.prefetchImmediateTier()
     this.ctx = new Context()
     try {
       await this.runPluginBoot(prefetching)
       this.settled.set(true)
+      return { outcome: 'ready' }
     } catch (reason) {
-      // Stay on the loading page; surface the sweep report (fail loud).
+      // 保留加载页并呈现完整失败信息，同时向产品入口返回明确结算。
       console.error(reason)
-      this.error.set(reason instanceof Error ? reason.message : String(reason))
+      const message = reason instanceof Error ? reason.message : String(reason)
+      this.error.set(message)
+      return { outcome: 'failed', message }
     }
   }
 
   /** Unmount the shell (loading page or settled UI). */
   dispose(): void {
-    this.root?.unmount()
+    const root = this.root
+    if (root === undefined) return
+    this.root = undefined
+    root.unmount()
+    void this.ctx.root.fiber.dispose()
   }
 
   /** Prefetch the immediately tier (factory registration only; failures defer to the import path). */
@@ -186,7 +218,12 @@ export class AppWebEntry {
     // its wrapper apply reads the kernel slot and provides ctx.modules (the
     // provide lives on the plugin face; see MODULES_ID for why the row loop
     // must then skip it).
-    const rows = [MODULES_ID, ...this.manifest.plugins.map(row => row.id).filter(id => id !== MODULES_ID), APP_SHELL_ID]
+    const rows = [
+      MODULES_ID,
+      GUI_BOOTSTRAP_ID,
+      ...this.manifest.plugins.map(row => row.id).filter(id => id !== MODULES_ID),
+      APP_SHELL_ID,
+    ]
     // Entry creation order carries no semantics (fiber inject waiting owns
     // activation order); creating concurrently lets non-prefetched bundle
     // loads parallelize. The app-shell assembly entry is appended by the
@@ -225,14 +262,85 @@ export class AppWebEntry {
       const state = STATE_LABELS[entry.fiber.state]
       if (state === 'active') continue
       if (state === 'pending') {
-        const missing = Object.keys(entry.fiber.inject).filter(service => ctx.get(service) === undefined)
+        // 依赖可见性由该条目的 Fiber 上下文决定，根上下文不能代表其隔离后的服务视图。
+        const missing = Object.keys(entry.fiber.inject).filter(service => entry.fiber?.ctx.get(service) === undefined)
         failures.push(`${name}: pending (waiting for service${missing.length === 1 ? '' : 's'}: ${missing.join(', ') || 'unknown'})`)
       } else {
         failures.push(`${name}: ${state}`)
       }
     }
     if (failures.length > 0) {
-      throw new Error(`web boot: ${String(failures.length)} entr${failures.length === 1 ? 'y' : 'ies'} did not activate\n${failures.join('\n')}`)
+      throw new Error(`gui boot: ${String(failures.length)} entr${failures.length === 1 ? 'y' : 'ies'} did not activate\n${failures.join('\n')}`)
     }
+  }
+}
+
+function withStaticPlugins(
+  manifest: BootManifest,
+  plugins: readonly GuiStaticPlugin[],
+): BootManifest {
+  if (plugins.length === 0) return manifest
+  const ids = new Set([
+    MODULES_ID,
+    GUI_BOOTSTRAP_ID,
+    APP_SHELL_ID,
+    ...manifest.plugins.map(row => row.id),
+  ])
+  const extra = plugins.map((plugin) => {
+    if (plugin.id === '' || ids.has(plugin.id)) {
+      throw new Error(`gui boot: duplicate or reserved static plugin id ${JSON.stringify(plugin.id)}`)
+    }
+    ids.add(plugin.id)
+    return {
+      id: plugin.id,
+      inject: [...plugin.inject ?? []],
+      immediately: plugin.immediately === true,
+    }
+  })
+  return {
+    rev: manifest.rev,
+    modules: manifest.modules,
+    plugins: [...manifest.plugins, ...extra],
+  }
+}
+
+/**
+ * 当前浏览器入口的薄包装层。
+ *
+ * 它只把 Web 注入的启动清单和默认浏览器载体适配为 `AppGuiEntry` 参数。
+ */
+export class AppWebEntry {
+  private readonly el: HTMLElement
+  private readonly seams: BootSeams | undefined
+  private entry: AppGuiEntry | undefined
+
+  /**
+   * 创建浏览器包装层。
+   * @param el - 应用挂载点。
+   * @param seams - 可选的 bundle loader 测试替换。
+   */
+  constructor(el: HTMLElement, seams?: BootSeams) {
+    this.el = el
+    this.seams = seams
+  }
+
+  /**
+   * 解析 Web 启动清单并运行通用 GUI 入口。
+   * @returns GUI 稳定或错误页完成渲染后结算。
+   */
+  run(): Promise<GuiBootResult> {
+    const manifest = parseBootManifest((globalThis as DshWindow).__DSH_BOOT__)
+    this.entry = new AppGuiEntry(this.el, {
+      manifest,
+      carrier: new WebClientCarrier(),
+      platformCapabilities: { kind: 'web' },
+      ...this.seams,
+    })
+    return this.entry.run()
+  }
+
+  /** 卸载当前 GUI。 */
+  dispose(): void {
+    this.entry?.dispose()
   }
 }

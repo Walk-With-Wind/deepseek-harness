@@ -6,6 +6,7 @@ import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { SessionLogDownloadHeaderAction } from '../src/client/HeaderAction.tsx'
 import { apply, inject } from '../src/client/index.ts'
+import type { SessionLogSaver } from '../src/client/saver.ts'
 
 const SID = 'session-export-apply' as SessionId
 
@@ -21,12 +22,13 @@ function declare(slots: SlotRegistry): () => void {
   } as never, () => null)
 }
 
-async function bench() {
+async function bench(save: SessionLogSaver['save'] = () => Promise.reject(new Error('测试 saver 失败'))) {
   const ctx = new Context()
   await ctx.plugin(SlotRegistry).await()
   const slots = ctx.get('slots') as SlotRegistry
   const declaration = declare(slots)
   ctx.provide('locale', new LocaleRuntime(ctx))
+  ctx.provide('sessionLogSaver', { save })
   const fiber = ctx.plugin({ inject: [...inject], apply })
   await fiber.await()
   return { ctx, slots, declaration, fiber }
@@ -34,9 +36,8 @@ async function bench() {
 
 describe('session-log-download browser plugin', () => {
   it('provides one controller and removes its Header contribution on disposal', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 500 })))
     const b = await bench()
-    expect(inject).toEqual(['slots', 'locale'])
+    expect(inject).toEqual(['slots', 'locale', 'sessionLogSaver'])
     expect(b.ctx.sessionLogDownload).toBeDefined()
     expect(b.slots.entries('conversation.session.header.actions')).toHaveLength(0)
     const entry = b.slots.entries('conversation.session.header.utilities')[0]
@@ -53,18 +54,17 @@ describe('session-log-download browser plugin', () => {
   })
 
   it('downloads only for an export execution acknowledged by this browser client', async () => {
-    const fetcher = vi.fn(async () => new Response('', { status: 500 }))
-    vi.stubGlobal('fetch', fetcher)
-    const first = await bench()
+    const save = vi.fn<SessionLogSaver['save']>(() => Promise.reject(new Error('测试 saver 失败')))
+    const first = await bench(save)
     const second = await bench()
 
     first.ctx.emit('command/executed', SID, 'plan', { kind: 'success' })
-    expect(fetcher).not.toHaveBeenCalled()
+    expect(save).not.toHaveBeenCalled()
     first.ctx.emit('command/executed', SID, 'export', { kind: 'error', text: 'bad path' })
-    expect(fetcher).not.toHaveBeenCalled()
+    expect(save).not.toHaveBeenCalled()
     first.ctx.emit('command/executed', SID, 'export', { kind: 'success' })
     await vi.waitFor(() => {
-      expect(fetcher).toHaveBeenCalledOnce()
+      expect(save).toHaveBeenCalledOnce()
       expect(first.ctx.sessionLogDownload.store.getSnapshot().bySession[SID]?.status).toBe('error')
     })
     expect(second.ctx.sessionLogDownload.store.getSnapshot().bySession[SID]).toBeUndefined()

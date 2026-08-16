@@ -23,11 +23,15 @@
     "packages/*/*/tests/**/*.client.spec.tsx",
     "packages/*/*/tests/**/*.client.tsx",
     "packages/*/*/tests/**/*.client.ts",
+    "apps/desktop/tests/**/*.client.spec.ts",
+    "apps/desktop/tests/**/*.client.spec.tsx",
     // Client package outside packages/client with a local CSS module face.
     "packages/extensions/ui-cordis/src/css-modules.d.ts",
     "packages/client/tsdown.client.ts",
     "scripts/client-bundle-css.spec.ts",
-    "scripts/client-bundle-purity.spec.ts"
+    "scripts/client-bundle-purity.spec.ts",
+    "scripts/lib/desktop-ipc-endurance.ts",
+    "scripts/lib/desktop-ipc-endurance.client.spec.ts"
   ],
   // A `*.host.spec.ts` covers the Host half of a split client package and
   // belongs to the host aggregate, which excludes this program's `*.client.*`
@@ -86,6 +90,7 @@
     { "path": "./packages/client/ui-user-questions" },
     { "path": "./packages/client/ui-trajectory" },
     { "path": "./packages/session-query/session-log-export" },
+    { "path": "./packages/session-query/session-log-saver-web" },
     { "path": "./packages/client/ui-theme" },
     { "path": "./packages/client/ui-settings" },
     { "path": "./packages/client/ui-settings-general" },
@@ -93,6 +98,7 @@
     { "path": "./packages/client/ui-settings-plugin-inventory" },
     { "path": "./packages/client/locale" },
     { "path": "./packages/client/web" },
-    { "path": "./apps/web" }
+    { "path": "./apps/web" },
+    { "path": "./apps/desktop/tsconfig.client.json" }
   ]
 }

@@ -83,6 +83,9 @@
     "apps/web/tests/workflow-run.e2e.ts",
     "apps/web/stress-tests/reasoning-chunks.stress.ts",
     "apps/cli/tests/**/*.ts",
+    "apps/desktop/forge.config.ts",
+    "apps/desktop/tests/**/*.host.spec.ts",
+    "apps/desktop/tests/**/*.e2e.ts",
     "examples/*/src/**/*.ts",
     "examples/*/start.ts",
     "examples/*/tests/**/*.ts",
@@ -103,6 +106,8 @@
     "packages/*/*/tests/**/*.client.spec.tsx",
     "packages/client/tsdown.client.ts",
     "scripts/client-bundle-css.spec.ts",
+    "scripts/lib/desktop-ipc-endurance.ts",
+    "scripts/lib/desktop-ipc-endurance.client.spec.ts",
     "packages/typert/generator/tests/fixtures/**",
     "scripts/client-bundle-purity.spec.ts"
   ],
@@ -240,6 +245,7 @@
     { "path": "./packages/acp/acp" },
     { "path": "./packages/examples/acp-demo" },
     { "path": "./packages/bundle/base" },
+    { "path": "./packages/bundle/gui-app" },
     { "path": "./packages/bundle/headless" },
     { "path": "./packages/bundle/web-app" },
     { "path": "./packages/boot/app-boot" },
@@ -293,6 +299,7 @@
     { "path": "./packages/lsp/lsp" },
     { "path": "./packages/lsp/lsp-stdio" },
     { "path": "./packages/lsp/tool-lsp" },
-    { "path": "./apps/cli" }
+    { "path": "./apps/cli" },
+    { "path": "./apps/desktop/tsconfig.host.json" }
   ]
 }

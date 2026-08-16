@@ -2,13 +2,13 @@
 
 English | [中文](client-modules.zh.md)
 
-The web plugin table: the Node half of the client module system in [dsh-client-modules](../../packages/client/modules), provided as `ctx.clientModules` (`ClientModuleRegistry`). It scans the host Loader's entries for packages declaring `dsh.client`, composes the `window.__DSH_BOOT__` entry graph, serves each bundle at `/plugins/<id>/client.js`, and taps the index render to inject the boot manifest — the four faces of one service. It is an optional capability of the web GUI stack, not part of the agent-loop spine, and it is a consumer of [dsh-host-webserver](../../packages/host/webserver): the carrier described in [web-server.md](web-server.md) supplies the prefix route and index tap this service registers. The same package's browser half (`ctx.modules`, the lazy-CJS module table that fetches and materializes these bundles) is kernel machinery documented in the [package README](../../packages/client/modules/README.md), not here.
+The GUI client module registry in [dsh-client-modules](../../packages/client/modules), provided as `ctx.clientModules` (`ClientModuleRegistry`). Its transport-neutral Host half scans Loader entries for packages declaring `dsh.client`, composes the logical boot graph, validates bundle paths, and produces a strict resource manifest. The package's `/web` adapter alone consumes [dsh-host-webserver](../../packages/host/webserver) to register `/plugins` and inject `window.__DSH_BOOT__`; Desktop consumes the same core through its private `app://` adapter. The client half (`ctx.modules`) is the lazy-CJS table that asks the product loader to deliver and materialize bundles; its kernel mechanics live in the [package README](../../packages/client/modules/README.md).
 
-Source: [`packages/client/modules/src/client/manifest.ts`](../../packages/client/modules/src/client/manifest.ts)
+Sources: [`packages/client/modules/src/client/manifest.ts`](../../packages/client/modules/src/client/manifest.ts), [`packages/client/modules/src/resource-manifest.ts`](../../packages/client/modules/src/resource-manifest.ts)
 
 ## The wire
 
-The graph is the wire single source between the Node and browser halves: the host composes `WebBootEntry` rows from scanned packages, injects the graph as the first script in `<head>` (`window.__DSH_BOOT__`, with `<` escaped so plugin-controlled strings cannot break out of the script element), and the shell parses it before booting anything. A page without a valid manifest cannot boot — the browser-side parser throws loud on a missing or malformed graph.
+The graph is the logical wire source between Host and GUI. The Host composes `WebBootEntry` rows from scanned packages. Web injects it as the first script in `<head>` (`window.__DSH_BOOT__`, with `<` escaped so plugin-controlled strings cannot break out of the script element); Desktop transfers the equivalent strict boot value through its control protocol. `AppGuiEntry` receives a parsed manifest before mounting anything, so a product without a valid graph cannot boot.
 
 ```ts type-equiv
 /**
@@ -44,21 +44,51 @@ interface WebBootGraph {
 
 Each row's `rev` is the bundle's content hash and rides the URL as a cache-busting query; the graph `rev` hashes the composed rows, so any row change changes it. `immediately` marks the stage-one prefetch tier (fetch and execute during module-face boot, registration only); a lazy row is fetched on first import.
 
+The resource manifest is a Host-to-product control value, not Renderer authority. Utility produces absolute, already-resolved source paths; Desktop Main validates the strict schema, converts only matching ids/revisions into `app://` resources, and sends Renderer only opaque graph URLs.
+
+```ts type-equiv
+/** 一个已由模块注册 core 解析并校验的 bundle 资源。 */
+interface ClientResourceEntry {
+  /** 包名，也是启动图条目 id。 */
+  readonly id: string
+  /** bundle 内容代际。 */
+  readonly rev: string
+  /** Renderer 可见的不透明 app/web URL 路径。 */
+  readonly urlPath: string
+  /** Utility 发给 Main 的可信 bundle 真实路径。 */
+  readonly sourcePath: string
+  /** 与 bundle 同目录的 source map 候选真实路径。 */
+  readonly sourceMapPath: string
+}
+```
+
+```ts type-equiv
+/** 当前模块图对应的不可变资源清单。 */
+interface ClientResourceManifest {
+  /** DTO 协议版本。 */
+  readonly version: typeof CLIENT_RESOURCE_MANIFEST_VERSION
+  /** 与启动图一致的整体内容代际。 */
+  readonly rev: string
+  /** 每个 GUI 客户端包恰好一个 bundle 资源。 */
+  readonly resources: readonly ClientResourceEntry[]
+}
+```
+
 ## The scan
 
-A package joins the table by declaring `dsh.client` (`platform: 'web'`, optional `inject` edges, optional `immediately`) in its package.json and exporting its built bundle at `exports["./client"]`. Package resolution anchors at the config tree's `ctx.baseUrl` — the cordis.yml directory, whose package declares every composed plugin as a dependency — and construction throws when that anchor is unset.
+A package joins the table by declaring `dsh.client` (`platform: 'web'`, optional `inject` edges, optional `immediately`) in its package.json and exporting its built bundle at `exports["./client"]`. An installed/closed host resolves host-owned packages from `ctx.hostModuleBaseUrl` first and falls back to the profile's `ctx.baseUrl` for bundle dependencies and user-installed plugins; an ordinary profile uses `ctx.baseUrl`. Construction throws when no resolution anchor exists.
 
 Scanning is incremental per package; there is no full-rescan code path. Every cordis `internal/plugin` emission (fiber construction or disposal) marks the fiber's entry name dirty, and a microtask flush reconciles each dirty name against the live loader entries. The activation pass seeds the same dirty set with all current entries and flushes synchronously, so first scan and steady state share one implementation — with opposite failure postures. At activation, a malformed declaration or missing bundle among the already-loaded entries aggregates into one loud `AggregateError` listing every broken package: the fiber FAILS and the boot's fail-loud sweep reports it. In steady state, a broken package logs a warning and must not poison the others.
 
 Package metadata — including the negative "not a client package" verdict — is cached per name and never expires: plugin-set changes take effect on restart. A fiber restart reuses its row and rev untouched; bundle content changes reach the graph only through `rebuilt()`.
 
-## The bundle route and index tap
+## Product resource adapters
 
-`GET`/`HEAD /plugins/<id>/client.js` serves the registered bundle from disk with `no-cache` (the rev query, not HTTP caching, anchors consistency); other methods are 405. An unknown id — or a registered row whose bundle is unreadable because it has not been built yet — answers a loud 404 rather than letting the carrier's SPA fallback ship HTML as JavaScript. The index tap injects the current graph on every index render, so a reload always boots against the live composition.
+The `/web` entry serves `GET`/`HEAD /plugins/<id>/client.js` with `no-cache` (the rev query, not HTTP caching, anchors consistency); other methods are 405. An unknown id or unreadable registered bundle answers 404 instead of letting SPA fallback return HTML as JavaScript. Its index tap injects the current graph on every render. Desktop does not import that adapter: Utility calls `resourceManifest()`, Main installs a new immutable resource map for the matching generation, and the `app://` protocol independently enforces method, path, revision, file identity, and content policy.
 
 ## The service
 
-`ClientModuleRegistry` (`ctx.clientModules`, defined in [`packages/client/modules/src/index.ts`](../../packages/client/modules/src/index.ts)) exposes reads and the rebuild face; signatures are in the generated [service catalog](#ctxclientmodules--clientmoduleregistry). `graph()` returns the current composed graph (a stable object between changes) and `clientPath(id)` the bundle's absolute path. `rebuilt(id)` is the only entry point through which bundle content reaches the graph: it re-hashes the file, and only a real rev change recomposes the graph and notifies. `onRebuilt` fires per changed bundle with the new rev; `onGraphChanged` fires after any flush that recomposed the graph (row added or removed, or a rebuilt rev change) and is pull-model — listeners re-read `graph()`. Both notification paths contain listener exceptions so one throwing subscriber cannot skip later subscribers or kill whatever triggered the flush.
+`ClientModuleRegistry` (`ctx.clientModules`, defined in [`packages/client/modules/src/index.ts`](../../packages/client/modules/src/index.ts)) exposes reads and the rebuild face; signatures are in the generated [service catalog](#ctxclientmodules--clientmoduleregistry). `graph()` returns the current composed graph, `clientPath(id)` returns one validated bundle path, and `resourceManifest()` snapshots the graph generation and all trusted paths for a non-Web product. `rebuilt(id)` is the only entry point through which bundle content reaches the graph: it re-hashes the file, and only a real rev change recomposes the graph and notifies. `onRebuilt` fires per changed bundle with the new rev; `onGraphChanged` fires after any flush that recomposed the graph and is pull-model. Both notification paths contain listener exceptions so one throwing subscriber cannot skip later subscribers or kill the triggering work.
 
 In development, [dsh-client-hmr](../../packages/client/hmr/README.md) is the registry's watch driver: its node half stat-polls every graph row's bundle from a synchronously captured baseline, calls `rebuilt(id)` on change, resyncs its watch set through `onGraphChanged`, and broadcasts rev changes to the browser half over SSE. Production graphs omit the HMR row entirely; the module host itself never watches files.
 
@@ -74,12 +104,12 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 ### `ctx.clientModules` — `ClientModuleRegistry`
 
-The web plugin table service: incremental `dsh.client` scan + wire composition + bundle route + index tap. Construction runs the activation scan synchronously — a malformed declaration or missing bundle among the already-loaded entries aggregates into one loud throw (FAILED fiber; the boot activation audit reports it).
+GUI 模块表服务：增量扫描 `dsh.client` 并组合启动图。构造阶段同步执行首次扫描， synchronously — a malformed declaration or missing bundle among the already-loaded entries aggregates into one loud throw (FAILED fiber; the boot activation audit reports it).
 
 ```ts cordis-catalog
 /**
- * Current composed entry graph (stable object between changes).
- * @returns the graph served as `window.__DSH_BOOT__`.
+ * 返回当前组合图；读取前同步结算已到达但尚未运行的增量扫描。
+ * @returns 提供给 GUI 外壳的启动图。
  */
 graph(): WebBootGraph
 
@@ -89,6 +119,12 @@ graph(): WebBootGraph
  * @returns the path, or undefined for an unknown id.
  */
 clientPath(id: string): string | undefined
+
+/**
+ * 生成交给 Desktop Main 的只读资源映射；Renderer 只接收 {@link graph} 中的不透明 URL。
+ * @returns 当前图代际对应的可信 bundle 真实路径清单。
+ */
+resourceManifest(): ClientResourceManifest
 
 /**
  * Re-hash one bundle (the HMR watch's registration hook — the only entry
@@ -114,5 +150,5 @@ onRebuilt(listener: (id: string, rev: string) => void): () => void
 onGraphChanged(listener: () => void): () => void
 ```
 
-Source: [`packages/client/modules/src/index.ts:184`](../../packages/client/modules/src/index.ts)
+Source: [`packages/client/modules/src/index.ts:167`](../../packages/client/modules/src/index.ts)
 <!-- END GENERATED cordis-surface -->

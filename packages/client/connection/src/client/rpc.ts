@@ -1,4 +1,4 @@
-/** Browser caller for generic Connection unary RPC channels. */
+/** 客户端通用 Connection 一元 RPC 调用器。 */
 
 import {
   RpcId,
@@ -13,10 +13,15 @@ const CHANNEL_PATTERN = /^\/[A-Za-z0-9._~-]+$/
 const ENDPOINT_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
 
 /**
- * Create the browser-backed generic RPC caller.
- * @returns caller that owns request correlation and response-envelope validation.
+ * 使用显式 Fetch 实现创建通用 RPC 调用器。
+ * @param fetcher - 产品载体提供的 Fetch 实现。
+ * @param baseUrl - 逻辑请求基址或逐调用解析器；IPC 载体可保留默认内部地址。
+ * @returns 持有请求关联和响应信封校验的调用器。
  */
-export function createWebConnectionRpc(): ClientConnectionRpc {
+export function createConnectionRpc(
+  fetcher: (input: URL | Request, init?: RequestInit) => Promise<Response>,
+  baseUrl: string | (() => string) = INTERNAL_BASE,
+): ClientConnectionRpc {
   return {
     async call(channel, endpoint, payload, signal) {
       assertTarget(channel, endpoint)
@@ -27,8 +32,8 @@ export function createWebConnectionRpc(): ClientConnectionRpc {
         method: endpoint,
         payload,
       }
-      const response = await globalThis.fetch(
-        new URL(`${channel}/${endpoint}`, resolveBase()),
+      const response = await fetcher(
+        new URL(`${channel}/${endpoint}`, typeof baseUrl === 'function' ? baseUrl() : baseUrl),
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -48,7 +53,15 @@ export function createWebConnectionRpc(): ClientConnectionRpc {
   }
 }
 
-function resolveBase(): string {
+/**
+ * 为现有浏览器调用方保留的薄适配器。
+ * @returns 使用当前页面 origin 与全局 Fetch 的 RPC 调用器。
+ */
+export function createWebConnectionRpc(): ClientConnectionRpc {
+  return createConnectionRpc((input, init) => globalThis.fetch(input, init), resolveWebBase)
+}
+
+function resolveWebBase(): string {
   const location = (globalThis as { location?: { origin?: string } }).location
   return location?.origin !== undefined && location.origin !== 'null' ? location.origin : INTERNAL_BASE
 }

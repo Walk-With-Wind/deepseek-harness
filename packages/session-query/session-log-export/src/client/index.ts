@@ -5,6 +5,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-commands/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { SessionLogDownloadController } from './controller.ts'
+import type {} from './saver.ts'
 import type { SessionLogDownloadDialogInjected } from './Dialog.tsx'
 import { SessionLogDownloadHeaderAction } from './HeaderAction.tsx'
 import { en, NS, zh, type SessionLogDownloadKey } from './locales.ts'
@@ -22,15 +23,16 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 export type { SessionLogDownloadEntry, SessionLogDownloadState } from './controller.ts'
+export type { SessionLogSaveOutcome, SessionLogSaveRequest, SessionLogSaver } from './saver.ts'
 
-export const inject = ['slots', 'locale']
+export const inject = ['slots', 'locale', 'sessionLogSaver']
 
 /**
  * Provide the download controller and mount its modal into the Session Header.
  * @param ctx - browser context carrying slots and locale services.
  */
 export function apply(ctx: ClientContext): void {
-  const controller = new SessionLogDownloadController()
+  const controller = new SessionLogDownloadController(ctx.sessionLogSaver)
   ctx.provide('sessionLogDownload', controller)
   ctx.effect(() => async () => { await controller.dispose() }, 'session-log-download: browser download lifecycle')
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'session-log-download: browser dictionaries')

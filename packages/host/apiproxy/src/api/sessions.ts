@@ -5,7 +5,14 @@
  */
 
 import type { MessageId } from '@deepseek-ai/dsh-llm/brand'
-import type { AttachmentIdType, ImageAttachmentLimits, ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import type {
+  AttachmentIdType,
+  ImageAttachmentLimits,
+  ImageAttachmentRef,
+  ImageMediaType,
+  ImageReadPurpose,
+  StreamImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session/types'
 // The pure-type outlet: api/ is browser-importable, and the package root's
@@ -87,6 +94,93 @@ export interface SessionProjectionsBlock {
 export type PromptContentPart =
   | { type: 'text'; text: string }
   | { type: 'image'; mediaType: ImageMediaType; data: string; name?: string }
+
+/** 由二进制 Prompt 载体按需消费的客户端图片源。 */
+export interface PromptUploadImageSource {
+  /** 草稿准入与 Host 都会校验的光栅媒体类型。 */
+  readonly mediaType: ImageMediaType
+  /** 上传 Manifest 声明的精确原始字节数。 */
+  readonly bytes: number
+  /** 可选的用户可见文件名。 */
+  readonly name?: string
+  /**
+   * 为一次提交尝试打开全新的原始字节流。
+   * @returns 不经过 base64 或数值数组编码的 pull 驱动文件字节。
+   */
+  stream(): ReadableStream<Uint8Array>
+}
+
+/** 二进制 Prompt 路由的客户端输入块。 */
+export type PromptUploadContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: PromptUploadImageSource }
+
+/** 图片以原始流式字节传输的客户端 Prompt 载荷。 */
+export interface PromptUploadPayload {
+  /** 目标普通会话。 */
+  readonly sessionId: SessionId
+  /** 排队或转向投递。 */
+  readonly mode: 'queue' | 'steer'
+  /** 保持用户输入顺序的文本与图片源。 */
+  readonly content: readonly PromptUploadContentPart[]
+  /** 写入已接受用户消息的浏览器本地 IANA 时区。 */
+  readonly clientTimeZone?: string
+}
+
+/** Host 从有界上传流重建的图片字节。 */
+export type PromptByteContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; mediaType: ImageMediaType; data: Uint8Array; name?: string }
+
+/** 载体 Manifest 与原始字节流解码后的 Host Prompt 载荷。 */
+export interface PromptBytePayload {
+  /** 目标普通会话。 */
+  readonly sessionId: SessionId
+  /** 排队或转向投递。 */
+  readonly mode: 'queue' | 'steer'
+  /** 保持用户输入顺序的文本与已解码图片字节。 */
+  readonly content: readonly PromptByteContentPart[]
+  /** 写入已接受用户消息的浏览器本地 IANA 时区。 */
+  readonly clientTimeZone?: string
+}
+
+/** Host 在一次物理上传请求内顺序消费的文本与图片源。 */
+export type PromptStreamContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: StreamImageAttachment }
+
+/** 仅供二进制 Fetch 路由与 Host 实现同进程传递的流式 Prompt。 */
+export interface PromptStreamPayload {
+  /** 目标普通会话。 */
+  readonly sessionId: SessionId
+  /** 排队或转向投递。 */
+  readonly mode: 'queue' | 'steer'
+  /** 保持用户输入顺序的一次性图片源。 */
+  readonly content: readonly PromptStreamContentPart[]
+  /** 浏览器本地 IANA 时区。 */
+  readonly clientTimeZone?: string
+  /**
+   * 在附件发布前证明所有声明图片之后没有尾随字节。
+   * @returns 请求正文精确结束时完成的 Promise。
+   */
+  completeBody(): Promise<void>
+  /**
+   * 释放或取消仍被当前请求持有的正文 reader；允许重复调用。
+   * @param reason - 提前结束时传给正文 reader 的取消原因。
+   * @returns reader 已释放时完成的 Promise。
+   */
+  disposeBody(reason?: unknown): Promise<void>
+}
+
+/** Host 完成会话引用校验后返回的原始附件内容。 */
+export interface AttachmentByteValue {
+  /** 日志中授权并由附件存储确认的引用。 */
+  readonly attachment: ImageAttachmentRef
+  /** 当前响应正文的实际媒体类型；缩略图可以不同于持久原图。 */
+  readonly mediaType: ImageMediaType
+  /** 未经过 base64 或 JSON 数组编码的原始字节。 */
+  readonly data: Uint8Array
+}
 
 /** Complete model selection for one session. */
 export interface ModelSelection {
@@ -352,9 +446,27 @@ export interface SessionsApi {
   }>):
   Promise<RpcResponse<{ accepted: true; command?: { kind: 'success'; text?: string } }>>
 
+  /**
+   * 提交二进制载体解码后的 Prompt，图片字节不经过 JSON/base64。
+   * 只有物理 Fetch handler 调用此方法，普通 RPC 分派不会暴露它。
+   */
+  promptUpload(request: RpcRequest<PromptStreamPayload>):
+  Promise<RpcResponse<{ accepted: true; command?: { kind: 'success'; text?: string } }>>
+
   /** Reads one durable image after proving that this session's log references its id. */
   attachment(request: RpcRequest<{ sessionId: SessionId; attachmentId: AttachmentIdType }>):
   Promise<RpcResponse<{ attachment: ImageAttachmentRef; data: string }>>
+
+  /**
+   * 为二进制读取路由返回同一份会话授权附件，不经过 JSON/base64。
+   * 普通 RPC 分派不暴露此方法。
+   */
+  attachmentBytes(request: RpcRequest<{
+    sessionId: SessionId
+    attachmentId: AttachmentIdType
+    purpose?: ImageReadPurpose
+  }>):
+  Promise<RpcResponse<AttachmentByteValue>>
 
   /**
    * Edits, removes, or strictly steers one pending queued occurrence on an ordinary session.

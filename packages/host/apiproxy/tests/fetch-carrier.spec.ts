@@ -96,10 +96,32 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
       async prompt(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: { accepted: true as const } } }
       },
+      async promptUpload(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { accepted: true as const } } }
+      },
       async attachment(request) {
         return {
           rpcId: request.rpcId,
           result: { ok: true, value: { attachment: { attachmentId: 'a' as never, mediaType: 'image/png' as const, bytes: 1, width: 1, height: 1 }, data: 'AA==' } },
+        }
+      },
+      async attachmentBytes(request) {
+        return {
+          rpcId: request.rpcId,
+          result: {
+            ok: true,
+            value: {
+              attachment: {
+                attachmentId: 'a' as never,
+                mediaType: 'image/png' as const,
+                bytes: 1,
+                width: 1,
+                height: 1,
+              },
+              mediaType: 'image/png',
+              data: Uint8Array.of(0),
+            },
+          },
         }
       },
       async updateQueue(request) {

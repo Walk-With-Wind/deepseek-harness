@@ -7,10 +7,29 @@ import { describe, expect, it } from 'vitest'
 import type { AddressInfo } from 'node:net'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy/api'
+import { PROMPT_UPLOAD_MAX_OVERHEAD_BYTES } from '@deepseek-ai/dsh-host-apiproxy'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { RpcId, type ClientRequest } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { WebServer, WebRoute, WebUpgradeRoute } from '@deepseek-ai/dsh-host-webserver'
-import { API_PATH, apply, HOST_EVENTS_PATH, inject, MUX_EVENTS_PATH, type HostConnectionHandle } from '../src/index.ts'
+import {
+  API_PATH,
+  apply as applyCore,
+  HOST_EVENTS_PATH,
+  MUX_EVENTS_PATH,
+  type HostConnectionHandle,
+} from '../src/index.ts'
+import {
+  apply as applyWeb,
+  type WebConnectionConfig,
+} from '../src/web.ts'
+
+const inject = ['webServer']
+
+/** 测试组合同时装载中立 core 与 Web adapter，生产配置用两个独立图条目完成同一组合。 */
+function apply(ctx: Context, config?: WebConnectionConfig): void {
+  applyCore(ctx)
+  applyWeb(ctx, config)
+}
 
 /** Structural webServer fake recording both route registries. */
 function fakeHttpServer(
@@ -101,6 +120,25 @@ describe('connection node half', () => {
     expect(() => { apply(ctx, { maxRequestBodyBytes: 1024 }) })
       .toThrow(/must be at least .* aggregate image limit/)
     expect(routes).toHaveLength(0)
+  })
+
+  it('按原始图片字节与有界 Manifest 校验 Web 请求体容量', () => {
+    const imageBytes = 20 * 1024 * 1024
+    const minimum = imageBytes + PROMPT_UPLOAD_MAX_OVERHEAD_BYTES
+    const acceptedRoutes: WebRoute[] = []
+    const accepted = new Context()
+    accepted.provide('webServer', fakeHttpServer(acceptedRoutes, []) as WebServer)
+    accepted.provide('attachments', { imageLimits: { maxMessageImageBytes: imageBytes } } as AttachmentStore)
+    accepted.provide('apiProxy', {} as ApiProxy)
+    expect(() => { apply(accepted, { maxRequestBodyBytes: minimum }) }).not.toThrow()
+    expect(acceptedRoutes).toHaveLength(1)
+
+    const rejected = new Context()
+    rejected.provide('webServer', fakeHttpServer([], []) as WebServer)
+    rejected.provide('attachments', { imageLimits: { maxMessageImageBytes: imageBytes } } as AttachmentStore)
+    rejected.provide('apiProxy', {} as ApiProxy)
+    expect(() => { apply(rejected, { maxRequestBodyBytes: minimum - 1 }) })
+      .toThrow(/must be at least .* aggregate image limit/)
   })
 
   it('fails the load on a trustedHosts entry that is not a bare authority', async () => {
@@ -252,7 +290,7 @@ describe('connection node half', () => {
 
     expect(() => connection.rpc.handle('/rpc', async () => ({ ok: true, value: null }), {
       authority: 'trusted-host',
-    })).toThrow(/duplicate route/)
+    })).toThrow(/RPC channel .* already registered/)
     await remove()
     expect(routes.map(candidate => candidate.path)).toEqual([API_PATH])
     await fiber.dispose()
@@ -395,7 +433,7 @@ describe('connection node half', () => {
     await route.handler(fakePost({ host: 'harness.example' }, '/rpc/fail', {
       type: 'client-request', rpcId: 'rpc-fail', method: 'fail', payload: {},
     }), failed.response)
-    expect(failed.state).toMatchObject({ status: 500, body: 'handler failure: Error: handler broke' })
+    expect(failed.state).toMatchObject({ status: 500, body: 'handler failure' })
 
     expect(() => connection.rpc.handle('/api', async () => ({ ok: true, value: null }), {
       authority: 'loopback',

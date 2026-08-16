@@ -70,6 +70,18 @@ import {
   subagentListRequestSchema,
   subagentPromptRequestSchema,
 } from '../api/subagents.schema.ts'
+import {
+  PROMPT_UPLOAD_CONTENT_TYPE,
+  PROMPT_UPLOAD_PATH,
+  PromptUploadDecodeError,
+  decodePromptUpload,
+} from './prompt-upload.ts'
+import {
+  ATTACHMENT_BYTES_PATH,
+  ATTACHMENT_BYTES_RPC_HEADER,
+  ATTACHMENT_PREVIEW_MAX_BYTES,
+  attachmentBytesQuerySchema,
+} from './attachment-bytes.ts'
 
 /**
  * Unary dispatch table, keyed by (and compiler-locked to) RpcMethodMap: a map row without a
@@ -164,6 +176,13 @@ function errorResponse(rpcId: RpcId, error: RpcError): Response {
 function fullResponse(narrow: RpcResponse<unknown>): Response {
   const body: ServerResponse = { type: 'server-response', rpcId: narrow.rpcId, result: narrow.result }
   return Response.json(body)
+}
+
+/** 把内部字节视图收窄为 Fetch 可接受的 ArrayBuffer 视图；只在 SharedArrayBuffer 情况复制。 */
+function fetchBodyBytes(data: Uint8Array): Uint8Array<ArrayBuffer> {
+  return data.buffer instanceof ArrayBuffer
+    ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+    : Uint8Array.from(data)
 }
 
 /**
@@ -268,6 +287,65 @@ export function toFetchHandler(api: ApiProxy): { fetch: typeof fetch } {
         if (req.method === 'GET') return response
         await response.body?.cancel()
         return new Response(null, { status: response.status, headers: response.headers })
+      }
+
+      if (path === ATTACHMENT_BYTES_PATH && req.method === 'GET') {
+        const parsed = attachmentBytesQuerySchema.safeParse(Object.fromEntries(url.searchParams))
+        if (!parsed.success) return new Response('missing or invalid attachment query parameters', { status: 400 })
+        let response
+        try {
+          response = await api.sessions.attachmentBytes({
+            rpcId: parsed.data.rpcId,
+            payload: {
+              sessionId: parsed.data.sessionId,
+              attachmentId: parsed.data.attachmentId,
+              purpose: parsed.data.purpose,
+            },
+          })
+        } catch (error: unknown) {
+          return new Response(`handler failure: ${String(error)}`, { status: 500 })
+        }
+        if (!response.result.ok) return fullResponse(response)
+        const { attachment, mediaType, data } = response.result.value
+        const originalMismatch = parsed.data.purpose === 'original'
+          && (data.byteLength !== attachment.bytes || mediaType !== attachment.mediaType)
+        const previewMismatch = parsed.data.purpose === 'thumbnail'
+          && (data.byteLength === 0 || data.byteLength > ATTACHMENT_PREVIEW_MAX_BYTES)
+        if (String(attachment.attachmentId) !== String(parsed.data.attachmentId)
+          || originalMismatch || previewMismatch) {
+          return new Response('attachment storage returned inconsistent metadata', { status: 500 })
+        }
+        return new Response(fetchBodyBytes(data), {
+          headers: {
+            'cache-control': 'no-store',
+            'content-length': String(data.byteLength),
+            'content-type': mediaType,
+            [ATTACHMENT_BYTES_RPC_HEADER]: response.rpcId,
+            'x-content-type-options': 'nosniff',
+          },
+        })
+      }
+
+      if (path === PROMPT_UPLOAD_PATH && req.method === 'POST') {
+        if (req.headers.get('content-type')?.trim().toLowerCase() !== PROMPT_UPLOAD_CONTENT_TYPE) {
+          return new Response(`content type must be ${PROMPT_UPLOAD_CONTENT_TYPE}`, { status: 415 })
+        }
+        if (req.body === null) return new Response('prompt upload body is missing', { status: 400 })
+        let request
+        try {
+          request = await decodePromptUpload(req.body)
+        } catch (error) {
+          if (error instanceof PromptUploadDecodeError) return new Response(error.message, { status: 400 })
+          return new Response('prompt upload body could not be read', { status: 400 })
+        }
+        try {
+          return fullResponse(await api.sessions.promptUpload(request))
+        } catch (error) {
+          if (error instanceof PromptUploadDecodeError) return new Response(error.message, { status: 400 })
+          return new Response(`handler failure: ${String(error)}`, { status: 500 })
+        } finally {
+          await request.payload.disposeBody()
+        }
       }
 
       if (req.method !== 'POST' || !path.startsWith('/api/')) {

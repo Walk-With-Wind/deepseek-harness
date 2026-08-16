@@ -5,10 +5,16 @@
   ],
   "ignoreBinaries": [
     "bwrap",
+    "codesign",
     "icacls",
+    "lsof",
     "musl-gcc",
+    "plutil",
+    "powershell.exe",
+    "ps",
     "python3",
     "sandbox-exec",
+    "spctl",
     "tar",
     "taskkill",
     "where.exe"
@@ -726,6 +732,31 @@
         "react-dom"
       ]
     },
+    "apps/desktop": {
+      "entry": [
+        "src/main/index.ts",
+        "src/preload/index.ts",
+        "src/renderer/css-modules.d.ts",
+        "src/renderer/platform-plugin.ts",
+        "src/utility/api-proxy.ts",
+        "src/utility/index.ts",
+        "src/utility/provider.ts",
+        "forge.config.ts",
+        "tests/**/*.spec.ts",
+        "tests/**/*.spec.tsx"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "src/**/*.tsx",
+        "tests/**/*.ts",
+        "tests/**/*.tsx"
+      ],
+      "ignoreDependencies": [
+        "@deepseek-ai/.+",
+        "@electron-forge/cli",
+        "playwright"
+      ]
+    },
     "apps/cli": {
       "entry": [
         "tests/**/*.spec.ts",
@@ -776,6 +807,11 @@
     "packages/bundle/headless": {
       "ignoreDependencies": [
         "@deepseek-ai/dsh-code-runtime-worker-thread"
+      ]
+    },
+    "packages/bundle/gui-app": {
+      "ignoreDependencies": [
+        "@deepseek-ai/.+"
       ]
     },
     "packages/bundle/web-app": {

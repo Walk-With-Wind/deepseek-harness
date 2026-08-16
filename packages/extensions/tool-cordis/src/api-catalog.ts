@@ -370,30 +370,48 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'a durable content-addressed reference.',
       },
       {
+        signature: 'async prepareImages(inputs: readonly StreamImageAttachment[]): Promise<PreparedImageAttachmentBatch>',
+        description: '顺序读取并校验一批图片，在显式提交前不发布任何对象。 默认实现为仅实现单图 API 的 Provider 提供兼容语义；本地 Provider 会覆盖为磁盘暂存实现。',
+        parameters: [{ name: 'inputs', description: '带精确声明长度的一次性图片字节源。' }],
+        returns: '可提交或清理的已准入批次。',
+      },
+      {
         signature: 'abstract readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment>',
         description: 'Read one image and verify that bytes still match the recorded reference.',
         parameters: [{ name: 'ref', description: 'durable reference from the session log.' }, { name: 'signal', description: 'optional cancellation for backend read and verification work.' }],
         returns: 'the verified bytes and canonical reference.',
         throws: ['the signal reason when aborted, or a storage error when verification fails.'],
       },
+      {
+        signature: 'async readImagePreview( ref: ImageAttachmentRef, maxEdge: number, signal?: AbortSignal, ): Promise<ImageAttachmentPreview>',
+        description: '为界面读取一份最长边受限的图片预览。 默认实现返回已核验原图，具备图像处理能力的 Provider 应覆盖以减少跨进程字节量。',
+        parameters: [{ name: 'ref', description: '会话日志中的持久附件引用。' }, { name: 'maxEdge', description: '预览图允许的最长边像素数。' }, { name: 'signal', description: '可选的读取取消信号。' }],
+        returns: '不产生新持久引用的派生图片字节。',
+      },
     ],
   },
   {
     key: 'clientModules',
-    summary: 'The web plugin table service: incremental `dsh.client` scan + wire composition + bundle route + index tap.',
-    description: 'The web plugin table service: incremental `dsh.client` scan + wire composition + bundle route + index tap. Construction runs the activation scan synchronously — a malformed declaration or missing bundle among the already-loaded entries aggregates into one loud throw (FAILED fiber; the boot activation audit reports it).',
+    summary: 'GUI 模块表服务：增量扫描 `dsh.client` 并组合启动图。构造阶段同步执行首次扫描， synchronously — a malformed declaration or missing bundle among the already-loaded entries aggregates into one loud throw (FAILED fiber; the boot activation audit reports it).',
+    description: 'GUI 模块表服务：增量扫描 `dsh.client` 并组合启动图。构造阶段同步执行首次扫描， synchronously — a malformed declaration or missing bundle among the already-loaded entries aggregates into one loud throw (FAILED fiber; the boot activation audit reports it).',
     methods: [
       {
         signature: 'graph(): WebBootGraph',
-        description: 'Current composed entry graph (stable object between changes).',
+        description: '返回当前组合图；读取前同步结算已到达但尚未运行的增量扫描。',
         parameters: [],
-        returns: 'the graph served as `window.__DSH_BOOT__`.',
+        returns: '提供给 GUI 外壳的启动图。',
       },
       {
         signature: 'clientPath(id: string): string | undefined',
         description: 'Absolute path of an entry\'s client bundle.',
         parameters: [{ name: 'id', description: 'entry id (package name).' }],
         returns: 'the path, or undefined for an unknown id.',
+      },
+      {
+        signature: 'resourceManifest(): ClientResourceManifest',
+        description: '生成交给 Desktop Main 的只读资源映射；Renderer 只接收 graph 中的不透明 URL。',
+        parameters: [],
+        returns: '当前图代际对应的可信 bundle 真实路径清单。',
       },
       {
         signature: 'rebuilt(id: string): string | undefined',
@@ -706,6 +724,28 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Create one Goal through the remote boundary.',
         parameters: [{ name: 'agent', description: 'exact live Agent resolved from the wire identity.' }, { name: 'request', description: 'objective and optional round cap.' }],
         returns: 'the created Goal identity.',
+      },
+    ],
+  },
+  {
+    key: 'hostLease',
+    summary: '成功持有的 Host 租约。',
+    description: '成功持有的 Host 租约。',
+    methods: [
+      {
+        signature: 'readonly owner: HostLeaseOwnerSummary',
+        description: '当前 owner 的只读身份摘要。',
+        parameters: [],
+      },
+      {
+        signature: 'readonly address: string',
+        description: '用于诊断的 socket 或 named-pipe 地址。',
+        parameters: [],
+      },
+      {
+        signature: 'release(): Promise<void>',
+        description: '幂等关闭 listener，并在安全时清除自身平台端点。',
+        parameters: [],
       },
     ],
   },
@@ -2738,6 +2778,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface CancelOptions {\n    keepInbox?: boolean | undefined;\n}',
   },
   {
+    name: 'ClientResourceEntry',
+    declaration: 'export interface ClientResourceEntry {\n    readonly id: string;\n    readonly rev: string;\n    readonly urlPath: string;\n    readonly sourcePath: string;\n    readonly sourceMapPath: string;\n}',
+  },
+  {
+    name: 'ClientResourceManifest',
+    declaration: 'export interface ClientResourceManifest {\n    readonly version: typeof CLIENT_RESOURCE_MANIFEST_VERSION;\n    readonly rev: string;\n    readonly resources: readonly ClientResourceEntry[];\n}',
+  },
+  {
     name: 'ClientResponse',
     declaration: 'export interface ClientResponse {\n    type: \'client-response\';\n    rpcId: RpcId;\n    result: RpcResult<unknown>;\n}',
   },
@@ -3130,8 +3178,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GoalView extends GoalSnapshot {\n    readonly roundsStarted: number;\n    readonly createdAt: number;\n    readonly updatedAt: number;\n    readonly activation: GoalActivation;\n}',
   },
   {
+    name: 'HostLeaseOwnerSummary',
+    declaration: 'export interface HostLeaseOwnerSummary {\n    readonly kind: \'cli\' | \'web\' | \'desktop\';\n    readonly version: string;\n    readonly pid: number;\n    readonly startedAt: string;\n    readonly nonceDigest: string;\n}',
+  },
+  {
     name: 'ImageAttachmentLimits',
     declaration: 'export interface ImageAttachmentLimits {\n    maxImageBytes: number;\n    maxImagesPerMessage: number;\n    maxMessageImageBytes: number;\n    maxImagePixels: number;\n    mediaTypes: readonly ImageMediaType[];\n}',
+  },
+  {
+    name: 'ImageAttachmentPreview',
+    declaration: 'export interface ImageAttachmentPreview {\n    readonly mediaType: ImageMediaType;\n    readonly data: Uint8Array;\n}',
   },
   {
     name: 'ImageAttachmentRef',
@@ -3480,6 +3536,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'PostToolDecision',
     declaration: 'export type PostToolDecision = {\n    kind: \'accept\';\n    content?: ContentBlock[];\n    value?: never;\n    additionalContexts?: UserMessage[];\n} | {\n    kind: \'accept\';\n    value: JsonValue;\n    content?: never;\n    additionalContexts?: UserMessage[];\n} | {\n    kind: \'block\';\n    feedback: ContentBlock[];\n    additionalContexts?: UserMessage[];\n};',
+  },
+  {
+    name: 'PreparedImageAttachmentBatch',
+    declaration: 'export interface PreparedImageAttachmentBatch {\n    commit(): Promise<readonly ImageAttachmentRef[]>;\n    dispose(): Promise<void>;\n}',
   },
   {
     name: 'PreparedLlmCall',
@@ -4092,6 +4152,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'StreamChunk',
     declaration: 'export type StreamChunk = {\n    type: \'block-start\';\n    index: number;\n    blockType: ContentBlockType;\n} | {\n    type: \'text-delta\';\n    index: number;\n    text: string;\n} | {\n    type: \'reasoning-delta\';\n    index: number;\n    text: string;\n} | {\n    type: \'tool-call-delta\';\n    index: number;\n    id: CallId;\n    name?: string;\n    argumentsDelta: string;\n} | {\n    type: \'block-end\';\n    index: number;\n    block: ContentBlock;\n} | {\n    type: \'usage\';\n    usage: TokenUsage;\n} | {\n    type: \'finish\';\n    reason: FinishReason;\n    replayState?: unknown;\n};',
+  },
+  {
+    name: 'StreamImageAttachment',
+    declaration: 'export interface StreamImageAttachment {\n    readonly chunks: AsyncIterable<Uint8Array>;\n    readonly bytes: number;\n    readonly mediaType: ImageMediaType;\n    readonly name?: string;\n}',
   },
   {
     name: 'SubagentCapabilities',

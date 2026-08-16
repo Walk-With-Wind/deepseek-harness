@@ -32,9 +32,9 @@ import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import type { CommandDescriptor, CommandExecution, CommandResult } from '@deepseek-ai/dsh-commands/types'
 import { deriveEventMessage, foldSurface } from '@deepseek-ai/dsh-session/surface'
 import type {
-  ApiProxy, ClientRequest, ClientResponse, HistoryEntry, HostFrame, MuxFrame, RpcReceipt,
+  ApiProxy, AttachmentBlobPayload, AttachmentBlobValue, ClientRequest, ClientResponse, HistoryEntry, HostFrame, MuxFrame, RpcReceipt,
   ModelProviderGroup, ModelSelection, RpcRequest, RpcResponse, RpcResult, ServerRequest, ServerResponse, SessionSummary,
-  ToolCallView, ToolEventView, ToolResultView, WorkspaceId, WorkspaceView,
+  PromptStreamContentPart, PromptUploadPayload, ToolCallView, ToolEventView, ToolResultView, WorkspaceId, WorkspaceView,
 } from './api.ts'
 import type { RequestPayload, ResponseValue, RpcMethodMap } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { AbstractApiClient, RpcId, SESSION_SEARCH_RESULT_LIMIT } from './api.ts'
@@ -48,6 +48,20 @@ function rpcRequest<P>(payload: P): RpcRequest<P> {
 
 function text(t: string): ContentBlock[] {
   return [{ type: 'text', text: t }]
+}
+
+/** Fixture 的历史附件表仍保存旧 RPC 所需的规范 base64。 */
+function bytesToBase64(data: Uint8Array): string {
+  let binary = ''
+  for (let offset = 0; offset < data.byteLength; offset += 0x8000) {
+    binary += String.fromCharCode(...data.subarray(offset, offset + 0x8000))
+  }
+  return btoa(binary)
+}
+
+/** Fixture 在内存附件表与浏览器 Blob 之间保留一次规范解码。 */
+function base64ToBytes(data: string): Uint8Array {
+  return Uint8Array.from(atob(data), character => character.charCodeAt(0))
 }
 
 function userMessage(content: ContentBlock[], source: MessageSource = { kind: 'user' }): UserMessage {
@@ -2470,6 +2484,45 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         )
         return ok(request, { accepted: true as const })
       },
+      promptUpload: async (request) => {
+        try {
+          const content = []
+          for (const part of request.payload.content) {
+            if (part.type === 'text') {
+              content.push(part)
+              continue
+            }
+            const data = new Uint8Array(part.source.bytes)
+            let offset = 0
+            for await (const chunk of part.source.chunks) {
+              if (chunk.byteLength > data.byteLength - offset) throw new Error('fixture image length mismatch')
+              data.set(chunk, offset)
+              offset += chunk.byteLength
+            }
+            if (offset !== data.byteLength) throw new Error('fixture image length mismatch')
+            content.push({
+              type: 'image' as const,
+              mediaType: part.source.mediaType,
+              data: bytesToBase64(data),
+              ...part.source.name === undefined ? {} : { name: part.source.name },
+            })
+          }
+          await request.payload.completeBody()
+          return await api.sessions.prompt({
+            rpcId: request.rpcId,
+            payload: {
+              sessionId: request.payload.sessionId,
+              mode: request.payload.mode,
+              content,
+              ...request.payload.clientTimeZone === undefined
+                ? {}
+                : { clientTimeZone: request.payload.clientTimeZone },
+            },
+          })
+        } finally {
+          await request.payload.disposeBody()
+        }
+      },
       attachment: (request) => {
         const stored = attachments.get(String(request.payload.attachmentId))
         if (stored === undefined) {
@@ -2490,6 +2543,17 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
           })
         }
         return ok(request, stored)
+      },
+      attachmentBytes: async (request) => {
+        const response = await api.sessions.attachment(request)
+        if (!response.result.ok) {
+          return { rpcId: response.rpcId, result: { ok: false, error: response.result.error } }
+        }
+        return ok(request, {
+          attachment: response.result.value.attachment,
+          mediaType: response.result.value.attachment.mediaType,
+          data: base64ToBytes(response.result.value.data),
+        })
       },
       updateQueue: request => err(request, {
         code: 'queue-item-not-found',
@@ -3068,6 +3132,77 @@ export class FixtureApiClient extends AbstractApiClient {
     const fullResponse: ServerResponse = { type: 'server-response', rpcId: response.rpcId, result: response.result }
     this.onEnvelope(fullResponse)
     return response
+  }
+
+  /** Fixture 保留拉取式图片源并直接交给内存 ApiProxy，不建立物理 Fetch。 */
+  protected override async callPromptUpload(
+    payload: PromptUploadPayload,
+  ): Promise<RpcResponse<ResponseValue<'session.prompt'>>> {
+    const content = payload.content.map((part): PromptStreamContentPart => {
+      if (part.type === 'text') return part
+      return {
+        type: 'image',
+        source: {
+          bytes: part.source.bytes,
+          mediaType: part.source.mediaType,
+          ...part.source.name === undefined ? {} : { name: part.source.name },
+          chunks: {
+            async *[Symbol.asyncIterator]() {
+              const reader = part.source.stream().getReader()
+              let completed = false
+              try {
+                while (true) {
+                  const item = await reader.read()
+                  if (item.done) {
+                    completed = true
+                    return
+                  }
+                  yield item.value
+                }
+              } finally {
+                if (!completed) await reader.cancel()
+                reader.releaseLock()
+              }
+            },
+          },
+        },
+      }
+    })
+    return this.api.sessions.promptUpload(rpcRequest({
+      sessionId: payload.sessionId,
+      mode: payload.mode,
+      content,
+      ...payload.clientTimeZone === undefined ? {} : { clientTimeZone: payload.clientTimeZone },
+      completeBody: () => Promise.resolve(),
+      disposeBody: () => Promise.resolve(),
+    }))
+  }
+
+  /** Fixture 把内存附件直接包装为 Blob，不建立物理 Fetch。 */
+  protected override async callAttachmentBlob(
+    payload: AttachmentBlobPayload,
+  ): Promise<RpcResponse<AttachmentBlobValue>> {
+    const response = await this.api.sessions.attachmentBytes(rpcRequest({
+      sessionId: payload.sessionId,
+      attachmentId: payload.attachment.attachmentId,
+      ...(payload.purpose === undefined ? {} : { purpose: payload.purpose }),
+    }))
+    if (!response.result.ok) {
+      return { rpcId: response.rpcId, result: { ok: false, error: response.result.error } }
+    }
+    return {
+      rpcId: response.rpcId,
+      result: {
+        ok: true,
+        value: {
+          attachment: response.result.value.attachment,
+          data: new Blob(
+            [Uint8Array.from(response.result.value.data).buffer],
+            { type: response.result.value.mediaType },
+          ),
+        },
+      },
+    }
   }
 
   /** Method-key dispatch into the in-memory contract impl (a real carrier routes by URL path instead). */

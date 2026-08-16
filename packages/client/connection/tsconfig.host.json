@@ -9,11 +9,18 @@
     "src/api-path.ts",
     "src/api-request-trust.ts",
     "src/http-bridge.ts",
+    "src/host/dispatch.ts",
+    "src/client/ipc/host-bridge.ts",
+    "src/client/ipc/protocol.ts",
+    "src/client/ipc/shared.ts",
+    "src/client/ipc/validation.ts",
     "src/index.ts",
     "src/invariant.ts",
+    "src/ipc-host.ts",
     "src/loopback-hostname.ts",
     "src/rpc-host.ts",
     "src/rpc.ts",
+    "src/web.ts",
     "src/websocket-downlink.ts"
   ],
   "references": [

@@ -1,20 +1,25 @@
 /** Content-addressed, owner-private local attachment storage. */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { constants } from 'node:fs'
+import { constants, createReadStream } from 'node:fs'
 import { chmod, link, mkdir, open, readFile, unlink } from 'node:fs/promises'
 import { dirname, join, parse, resolve } from 'node:path'
 import {
   AttachmentError,
   AttachmentId,
+  IMAGE_PREVIEW_MAX_EDGE,
+  validateImageStreamBatch,
 } from '@deepseek-ai/dsh-attachment'
 import type {
   ImageAttachmentLimits,
+  ImageAttachmentPreview,
   ImageAttachmentRef,
+  PreparedImageAttachmentBatch,
   SaveImageAttachment,
+  StreamImageAttachment,
   StoredImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
-import { detectImage, probeImage } from './image.ts'
+import { detectImage, probeImage, renderImagePreviewFile } from './image.ts'
 
 const ID_PATTERN = /^sha256:([a-f0-9]{64})$/
 const durableHomes = new Set<string>()
@@ -35,6 +40,10 @@ function displayName(value: string | undefined): string | undefined {
 
 function objectPath(root: string, sha256: string): string {
   return join(root, 'objects', sha256.slice(0, 2), sha256)
+}
+
+function previewPath(root: string, sha256: string): string {
+  return join(root, 'previews', `${sha256}.webp`)
 }
 
 function ensureReference(ref: ImageAttachmentRef): string {
@@ -124,6 +133,215 @@ async function ensureDurableHome(path: string): Promise<string> {
     durableHomes.add(home)
   }
   return home
+}
+
+interface StagedImage {
+  readonly temporary: string
+  readonly previewTemporary: string
+  readonly sha256: string
+  readonly ref: ImageAttachmentRef
+}
+
+/** 幂等清理尚未发布的临时文件；文件已不存在视为清理完成。 */
+async function unlinkTemporary(path: string): Promise<void> {
+  try {
+    await unlink(path)
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return
+    throw error
+  }
+}
+
+/** 同时清理一张图片的规范字节与派生预览暂存文件。 */
+async function unlinkStaged(image: StagedImage): Promise<void> {
+  await Promise.all([
+    unlinkTemporary(image.temporary),
+    unlinkTemporary(image.previewTemporary),
+  ])
+}
+
+/** 处理短写，直至当前分片全部写入文件句柄。 */
+async function writeChunk(handle: Awaited<ReturnType<typeof open>>, chunk: Uint8Array): Promise<void> {
+  let offset = 0
+  while (offset < chunk.byteLength) {
+    const { bytesWritten } = await handle.write(chunk.subarray(offset))
+    if (bytesWritten === 0) throw new Error('attachment staging write made no progress')
+    offset += bytesWritten
+  }
+}
+
+/** 以仅所有者可访问的权限创建并同步一个不可覆盖文件。 */
+async function writePrivateFile(path: string, data: Uint8Array): Promise<void> {
+  const handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600)
+  try {
+    await writeChunk(handle, data)
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+}
+
+/** 把一个精确长度图片源写入暂存区，并在同一次完整解码中生成预览与持久引用。 */
+async function stageImage(
+  staging: string,
+  input: StreamImageAttachment,
+  limits: ImageAttachmentLimits,
+): Promise<StagedImage> {
+  const temporary = join(staging, randomUUID())
+  const previewTemporary = join(staging, `${randomUUID()}.webp`)
+  const hash = createHash('sha256')
+  let handle: Awaited<ReturnType<typeof open>> | undefined
+  let received = 0
+  try {
+    handle = await open(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600)
+    for await (const chunk of input.chunks) {
+      if (chunk.byteLength === 0) continue
+      if (chunk.byteLength > input.bytes - received) {
+        throw new AttachmentError('Image stream does not match its declared byte length.', 'IMAGE_LENGTH_MISMATCH')
+      }
+      await writeChunk(handle, chunk)
+      hash.update(chunk)
+      received += chunk.byteLength
+    }
+    if (received !== input.bytes) {
+      throw new AttachmentError('Image stream does not match its declared byte length.', 'IMAGE_LENGTH_MISMATCH')
+    }
+    await handle.sync()
+    await handle.close()
+    handle = undefined
+    // 准入的完整解码同时产出小预览，避免消息落盘后再次扫描原图。
+    const preview = await renderImagePreviewFile(
+      temporary,
+      IMAGE_PREVIEW_MAX_EDGE,
+      limits.maxImagePixels,
+    )
+    if (preview.source.mediaType !== input.mediaType) {
+      throw new AttachmentError('Declared image type does not match its bytes.', 'IMAGE_TYPE_MISMATCH')
+    }
+    await writePrivateFile(previewTemporary, preview.data)
+    const sha256 = hash.digest('hex')
+    const name = displayName(input.name)
+    return {
+      temporary,
+      previewTemporary,
+      sha256,
+      ref: {
+        attachmentId: AttachmentId(`sha256:${sha256}`),
+        ...preview.source,
+        bytes: input.bytes,
+        ...(name === undefined ? {} : { name }),
+      },
+    }
+  } catch (error) {
+    if (handle !== undefined) {
+      try {
+        await handle.close()
+      } catch (closeError) {
+        throw new AttachmentError('Unable to close staged image attachment.', 'ATTACHMENT_WRITE_FAILED', {
+          cause: new AggregateError([error, closeError]),
+        })
+      }
+    }
+    try {
+      await Promise.all([unlinkTemporary(temporary), unlinkTemporary(previewTemporary)])
+    } catch (cleanupError) {
+      throw new AttachmentError('Unable to clean staged image attachment.', 'ATTACHMENT_WRITE_FAILED', {
+        cause: new AggregateError([error, cleanupError]),
+      })
+    }
+    throw error
+  }
+}
+
+/** 流式计算文件摘要，避免为去重校验重新分配完整对象缓冲区。 */
+async function digestFile(path: string, signal?: AbortSignal): Promise<string> {
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(path, { signal })) hash.update(chunk as Uint8Array)
+  return hash.digest('hex')
+}
+
+/**
+ * 把一批图片顺序写入私有暂存区并完成准入，显式提交前不发布内容寻址对象。
+ * @param root - 绝对的 `DSH_HOME/attachments/v1` 根目录。
+ * @param inputs - 带精确长度的一次性图片字节源。
+ * @param limits - 当前部署解析后的图片准入限制。
+ * @returns 可提交或清理的已准入批次。
+ */
+export async function prepareImageFiles(
+  root: string,
+  inputs: readonly StreamImageAttachment[],
+  limits: ImageAttachmentLimits,
+): Promise<PreparedImageAttachmentBatch> {
+  validateImageStreamBatch(inputs, limits)
+  const boundary = await ensureDurableHome(dirname(dirname(resolve(root))))
+  const objects = join(root, 'objects')
+  const previews = join(root, 'previews')
+  const staging = join(root, 'tmp')
+  await ensureDurableDirectory(objects, boundary)
+  await ensureDurableDirectory(previews, boundary)
+  await ensureDurableDirectory(staging, boundary)
+  const staged: StagedImage[] = []
+  try {
+    for (const input of inputs) staged.push(await stageImage(staging, input, limits))
+  } catch (error) {
+    try {
+      await Promise.all(staged.map(unlinkStaged))
+    } catch (cleanupError) {
+      throw new AttachmentError('Unable to clean rejected image batch.', 'ATTACHMENT_WRITE_FAILED', {
+        cause: new AggregateError([error, cleanupError]),
+      })
+    }
+    if (error instanceof AttachmentError) throw error
+    throw new AttachmentError('Unable to stage image attachment.', 'ATTACHMENT_WRITE_FAILED', { cause: error })
+  }
+  let committed: readonly ImageAttachmentRef[] | undefined
+  let disposePromise: Promise<void> | undefined
+  return {
+    commit: async () => {
+      if (disposePromise !== undefined) {
+        throw new AttachmentError('Prepared image batch is already disposed.', 'ATTACHMENT_BATCH_DISPOSED')
+      }
+      if (committed !== undefined) return committed
+      try {
+        const buckets = new Set<string>()
+        for (const item of staged) {
+          const bucket = join(objects, item.sha256.slice(0, 2))
+          buckets.add(bucket)
+          await ensureDurableDirectory(bucket, boundary)
+        }
+        for (const item of staged) {
+          const target = objectPath(root, item.sha256)
+          try {
+            await link(item.temporary, target)
+          } catch (error) {
+            if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+            if (await digestFile(target) !== item.sha256) {
+              throw new AttachmentError('Stored attachment failed integrity verification.', 'ATTACHMENT_CORRUPT')
+            }
+          }
+        }
+        for (const item of staged) {
+          try {
+            await link(item.previewTemporary, previewPath(root, item.sha256))
+          } catch (error) {
+            if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+          }
+        }
+        for (const bucket of buckets) await syncDirectory(bucket)
+        await syncDirectory(objects)
+        await syncDirectory(previews)
+        committed = Object.freeze(staged.map(item => item.ref))
+        return committed
+      } catch (error) {
+        if (error instanceof AttachmentError) throw error
+        throw new AttachmentError('Unable to persist image attachment batch.', 'ATTACHMENT_WRITE_FAILED', { cause: error })
+      }
+    },
+    dispose: () => {
+      disposePromise ??= Promise.all(staged.map(unlinkStaged)).then(() => undefined)
+      return disposePromise
+    },
+  }
 }
 
 /**
@@ -228,4 +446,65 @@ export async function readImageFile(
     throw new AttachmentError('Stored attachment metadata does not match its reference.', 'ATTACHMENT_CORRUPT')
   }
   return { ref, data }
+}
+
+/**
+ * 优先读取准入阶段生成的有界 WebP；旧对象核验原图摘要后按需派生。
+ * @param root - 绝对的 `DSH_HOME/attachments/v1` 根目录。
+ * @param ref - 会话日志中的持久附件引用。
+ * @param maxEdge - 输出最长边像素数。
+ * @param signal - 可选的读取取消信号。
+ * @returns 不产生新持久引用、只供界面使用的派生图片字节。
+ */
+export async function readImagePreviewFile(
+  root: string,
+  ref: ImageAttachmentRef,
+  maxEdge: number,
+  signal?: AbortSignal,
+): Promise<ImageAttachmentPreview> {
+  signal?.throwIfAborted()
+  if (!Number.isSafeInteger(maxEdge) || maxEdge <= 0) {
+    throw new AttachmentError('Image preview edge is invalid.', 'ATTACHMENT_READ_FAILED')
+  }
+  const sha256 = ensureReference(ref)
+  if (maxEdge === IMAGE_PREVIEW_MAX_EDGE) {
+    try {
+      const data = new Uint8Array(await readFile(previewPath(root, sha256), { signal }))
+      const metadata = await probeImage(data)
+      if (metadata.mediaType !== 'image/webp'
+        || metadata.width > maxEdge || metadata.height > maxEdge) {
+        throw new AttachmentError('Stored attachment preview is invalid.', 'ATTACHMENT_CORRUPT')
+      }
+      return { mediaType: 'image/webp', data }
+    } catch (error) {
+      signal?.throwIfAborted()
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+        if (error instanceof AttachmentError && error.code === 'ATTACHMENT_CORRUPT') throw error
+        throw new AttachmentError('Unable to read image attachment preview.', 'ATTACHMENT_READ_FAILED', { cause: error })
+      }
+      // 旧对象没有派生预览时回退到一次性生成，保持已有历史可读。
+    }
+  }
+  const path = objectPath(root, sha256)
+  let actualDigest: string
+  try {
+    actualDigest = await digestFile(path, signal)
+  } catch (error) {
+    signal?.throwIfAborted()
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      throw new AttachmentError('Attachment object is missing.', 'ATTACHMENT_NOT_FOUND')
+    }
+    throw new AttachmentError('Unable to read image attachment.', 'ATTACHMENT_READ_FAILED', { cause: error })
+  }
+  if (actualDigest !== sha256) {
+    throw new AttachmentError('Stored attachment failed integrity verification.', 'ATTACHMENT_CORRUPT')
+  }
+  const preview = await renderImagePreviewFile(path, maxEdge)
+  signal?.throwIfAborted()
+  if (preview.source.mediaType !== ref.mediaType
+    || preview.source.width !== ref.width
+    || preview.source.height !== ref.height) {
+    throw new AttachmentError('Stored attachment metadata does not match its reference.', 'ATTACHMENT_CORRUPT')
+  }
+  return { mediaType: 'image/webp', data: preview.data }
 }

@@ -1,10 +1,8 @@
-// Shared scaffold for the keyless browser e2e lane (Agent Note:
-// .agents/notes/implemented/testing/2026-07-24-web-gui-browser-e2e-lane.md).
-// Boots the REAL web composition — the dsh-base and dsh-web-app bundle
-// patches over the empty profile root through the vendored Loader (the same
-// layer stack the profile boot composes), patched the
-// snapshot way — so a real chromium exercises the real HTTP uplink/WebSocket
-// downlink, api-gateway, agent loop, tools, and persistence. Modes ride $DSH_SNAPSHOT:
+// 无密钥浏览器 e2e 通道的共享脚手架（见 Agent Note：
+// .agents/notes/implemented/testing/2026-07-24-web-gui-browser-e2e-lane.md）。
+// 它通过 vendored Loader 在空 profile 根上应用 dsh-base、dsh-gui-app 与
+// dsh-web-app，使用与正式 profile 启动相同的层栈和快照覆盖，使真实 Chromium 覆盖
+// HTTP 上行、WebSocket 下行、API Gateway、Agent Loop、工具与持久化。模式由 $DSH_SNAPSHOT 指定：
 // replay (default, keyless: normally disables the llm-deepseek row and
 // inserts dsh-llm-replay in providers mode), record (real adapter + key,
 // harvests fixtures from live session memory), refresh (keyless replay that
@@ -41,6 +39,7 @@ import {
   loadOverlayPatches,
 } from '@deepseek-ai/dsh-app-boot'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
+import { SHIPPED_AGENT_PRESET_ROOT } from '@deepseek-ai/dsh-gui-app'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
 import type {
@@ -96,13 +95,14 @@ export function webSnapshotMode(): WebSnapshotMode {
   throw new Error(`DSH_SNAPSHOT must be replay, record, or refresh; got ${JSON.stringify(value)}`)
 }
 
-/** The shipped composition under test: the dsh-base and dsh-web-app bundle patches over the empty profile root. */
+/** 正式 Web 组合在空 profile 根上依次应用 base、共享 GUI 与浏览器传输层。 */
 const BASE_PATCH_PATH = join(REPO_ROOT, 'packages/bundle/base/cordis.patch.yml')
+const GUI_PATCH_PATH = join(REPO_ROOT, 'packages/bundle/gui-app/cordis.patch.yml')
 const WEB_PATCH_PATH = join(REPO_ROOT, 'packages/bundle/web-app/cordis.patch.yml')
 /** The installation anchor whose dependency surface the profile module fallback mirrors. */
 const INSTALL_ANCHOR = join(REPO_ROOT, 'apps/cli/package.json')
-/** The deployment's own agent-preset root, shipped beside the app's config. */
-const SHIPPED_PRESET_DIR = join(REPO_ROOT, 'apps/cli/config/agent-presets')
+/** 共享 GUI bundle 随部署交付的 Agent Preset 根目录。 */
+const SHIPPED_PRESET_DIR = SHIPPED_AGENT_PRESET_ROOT
 
 // Replay publishes the provider catalog the gateway routes to (providers
 // mode, never catch-all: with llm-deepseek disabled no adapter exists, so a
@@ -367,17 +367,19 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
   // patch id that stops matching a row fails the boot sweep loudly instead of
   // drifting).
   const basePatches = loadOverlayPatches('web e2e scaffold', BASE_PATCH_PATH)
+  const guiPatches = loadOverlayPatches('web e2e scaffold', GUI_PATCH_PATH)
   const surfacePatches = loadOverlayPatches('web e2e scaffold', WEB_PATCH_PATH)
   const extraOverlayPatches = options.extraOverlayPath === undefined
     ? []
     : loadOverlayPatches('web e2e scaffold', options.extraOverlayPath)
-  const composedRows = composeEntries([basePatches, surfacePatches, extraOverlayPatches])
+  const composedRows = composeEntries([basePatches, guiPatches, surfacePatches, extraOverlayPatches])
   const webRuntimeConfig = composedRows.find(row => row.id === 'web-runtime')?.config as {
     surfaceContext?: boolean
   } | undefined
   const surfaceContext = webRuntimeConfig?.surfaceContext !== false
   const patches: PatchOptions[] = [
     ...basePatches,
+    ...guiPatches,
     ...surfacePatches,
     ...extraOverlayPatches,
     // The roster's `roots` is an assembly fact AppCLIEntry resolves and patches
@@ -449,7 +451,7 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
     { id: 'web-runtime', config: { printUrl: false, surfaceContext } },
     ...options.remoteAuthority === undefined
       ? []
-      : [{ id: 'connection', config: { trustedHosts: [options.remoteAuthority] } }],
+      : [{ id: 'connection-web', config: { trustedHosts: [options.remoteAuthority] } }],
     { id: 'settings', config: { dshHome: harnessHome } },
     { id: 'credentials', config: { dshHome: harnessHome } },
     // The shipped directory-picker row is the -auto chooser, which resolves

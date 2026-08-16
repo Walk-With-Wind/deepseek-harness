@@ -1,6 +1,6 @@
 /** Node-half composition diagnostics for package metadata and built client bundles. */
 
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -8,7 +8,11 @@ import { pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { WebServer, WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import { ClientModuleRegistry } from '../src/index.ts'
+import {
+  ClientModuleRegistry,
+  parseClientResourceManifest,
+} from '../src/index.ts'
+import { apply as applyWeb } from '../src/web.ts'
 
 let root: string | undefined
 
@@ -59,6 +63,7 @@ function constructWithRoute(packageNames: string[]): { service: ClientModuleRegi
   }
   ctx.provide('webServer', webServer as WebServer)
   const service = new ClientModuleRegistry(ctx)
+  applyWeb(ctx)
   if (route === undefined) throw new Error('client bundle route was not registered')
   return { service, route }
 }
@@ -69,6 +74,91 @@ function construct(packageNames: string[]): ClientModuleRegistry {
 }
 
 describe('client bundle activation', () => {
+  it('在首次图读取前同步结算尚未运行的增量扫描', () => {
+    const packageName = '@fixture/late-client'
+    const clientPath = writePackage(packageName)
+    mkdirSync(dirname(clientPath), { recursive: true })
+    writeFileSync(clientPath, 'module.exports = {}\n')
+    const entries: Array<{ options: { name: string }; fiber: object; disabled: boolean }> = []
+    const ctx = new Context()
+    ctx.baseUrl = pathToFileURL(root!).href + '/'
+    ctx.provide('loader', {
+      *entries() { yield * entries },
+    })
+    const service = new ClientModuleRegistry(ctx)
+    const lateEntry = { options: { name: packageName }, fiber: {}, disabled: false }
+    entries.push(lateEntry)
+    // 首次快照可能早于增量通知到达，但此时 Loader 已经完成整个 Host 图激活。
+
+    expect(service.graph().entries.map(entry => entry.id)).toEqual([packageName])
+    expect(service.resourceManifest().resources.map(resource => resource.id)).toEqual([packageName])
+  })
+
+  it('接收模块注册器同级条目的激活通知', async () => {
+    const packageName = '@fixture/sibling-client'
+    const clientPath = writePackage(packageName)
+    mkdirSync(dirname(clientPath), { recursive: true })
+    writeFileSync(clientPath, 'module.exports = {}\n')
+    const entries: Array<{ options: { name: string }; fiber: object; disabled: boolean }> = []
+    const ctx = new Context()
+    ctx.baseUrl = pathToFileURL(root!).href + '/'
+    ctx.provide('loader', {
+      *entries() { yield * entries },
+    })
+    const lateEntry = { options: { name: packageName }, fiber: {}, disabled: false }
+    ctx.on('internal/plugin', (fiber) => {
+      // 模拟 Loader 的全局监听：条目归属在原始 internal/plugin 发布后才写入 Fiber。
+      ;(fiber as unknown as { entry?: typeof lateEntry }).entry ??= lateEntry
+    }, { global: true })
+    let service: ClientModuleRegistry | undefined
+    await ctx.plugin({
+      apply(inner) { service = new ClientModuleRegistry(inner) },
+    })
+    entries.push(lateEntry)
+    await ctx.plugin({
+      apply(inner) {
+        // Loader 条目与 modules 条目互为同级，增量监听必须跨 Fiber 作用域接收通知。
+        inner.emit('internal/plugin', {} as never)
+      },
+    })
+
+    expect(service?.graph().entries.map(entry => entry.id)).toEqual([packageName])
+  })
+
+  it('封闭宿主优先从显式模块基址解析客户端包', () => {
+    const packageName = '@fixture/host-owned-client'
+    const clientPath = writePackage(packageName)
+    mkdirSync(dirname(clientPath), { recursive: true })
+    writeFileSync(clientPath, 'module.exports = {}\n')
+    const ctx = new Context()
+    ctx.baseUrl = 'file:///nonexistent-profile/cordis.yml'
+    ctx.provide('hostModuleBaseUrl', pathToFileURL(join(root!, 'host-entry.mjs')).href)
+    ctx.provide('loader', {
+      *entries() {
+        yield { options: { name: packageName }, fiber: {}, disabled: false }
+      },
+    })
+
+    expect(new ClientModuleRegistry(ctx).graph().entries.map(entry => entry.id)).toEqual([packageName])
+  })
+
+  it('封闭宿主从 Profile 基址解析组合包的传递客户端依赖', () => {
+    const packageName = '@fixture/profile-owned-client'
+    const clientPath = writePackage(packageName)
+    mkdirSync(dirname(clientPath), { recursive: true })
+    writeFileSync(clientPath, 'module.exports = {}\n')
+    const ctx = new Context()
+    ctx.baseUrl = pathToFileURL(join(root!, 'profiles', 'desktop', 'cordis.yml')).href
+    ctx.provide('hostModuleBaseUrl', pathToFileURL(join(tmpdir(), 'dsh-unrelated-host', 'entry.mjs')).href)
+    ctx.provide('loader', {
+      *entries() {
+        yield { options: { name: packageName }, fiber: {}, disabled: false }
+      },
+    })
+
+    expect(new ClientModuleRegistry(ctx).graph().entries.map(entry => entry.id)).toEqual([packageName])
+  })
+
   it('allows sibling dsh roles', () => {
     const currentName = '@fixture/current-client-field'
     const clientPath = writePackage(currentName, {
@@ -148,5 +238,41 @@ describe('client bundle activation', () => {
       'cache-control': 'no-cache',
     })
     expect(body).toBe(map)
+  })
+
+  it('生成严格、不可变且与启动图同代的 Desktop 资源清单', () => {
+    const packageName = '@fixture/resource-manifest'
+    const clientPath = writePackage(packageName)
+    mkdirSync(dirname(clientPath), { recursive: true })
+    writeFileSync(clientPath, 'module.exports = {}\n')
+    const service = construct([packageName])
+
+    const manifest = service.resourceManifest()
+    expect(parseClientResourceManifest(manifest)).toEqual(manifest)
+    expect(manifest.rev).toBe(service.graph().rev)
+    expect(manifest.resources).toEqual([{
+      id: packageName,
+      rev: service.graph().entries[0]?.rev,
+      urlPath: `/plugins/${packageName}/client.js`,
+      sourcePath: realpathSync(clientPath),
+      sourceMapPath: `${realpathSync(clientPath)}.map`,
+    }])
+    expect(Object.isFrozen(manifest)).toBe(true)
+    expect(Object.isFrozen(manifest.resources)).toBe(true)
+    expect(() => parseClientResourceManifest({
+      ...manifest,
+      unexpected: true,
+    })).toThrow()
+  })
+
+  it('拒绝 client export 通过符号链接逃逸所属包根', () => {
+    const packageName = '@fixture/symlink-escape'
+    const clientPath = writePackage(packageName)
+    mkdirSync(dirname(clientPath), { recursive: true })
+    const outside = join(root!, 'outside-client.js')
+    writeFileSync(outside, 'module.exports = {}\n')
+    symlinkSync(outside, clientPath)
+
+    expect(() => construct([packageName])).toThrow(/client bundle resolves outside its package root/)
   })
 })

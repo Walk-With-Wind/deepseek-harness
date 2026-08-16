@@ -4,17 +4,17 @@ Status: implemented
 
 [English](2026-07-19-gui-layering-and-rpc-protocol.md) | 中文
 
-> 分工线：本篇 = 分层模型 + 通道无关的 RPC 协议；协议的 Web 实现由 HTTP 上行加 [WebSocket 下行载体](2026-08-04-websocket-downlink-carrier.md)组成，浏览器对象层见 [Web 客户端架构笔记](2026-07-19-gui-web-client-architecture.md)。
+> 分工线：本篇 = 分层模型 + 通道无关的 RPC 协议；协议的 Web 实现由 HTTP 上行加 [WebSocket 下行载体](2026-08-04-websocket-downlink-carrier.md)组成，GUI 对象层见 [Web 客户端架构笔记](2026-07-19-gui-web-client-architecture.md)，共享 carrier 与 Desktop 实现见[共享 GUI carrier Note](2026-08-16-shared-gui-composition-and-explicit-carrier.md)。
 
 ## Problem
 
-需要提供 UI 对接层，除已有 ACP（Agent Client Protocol）/stdio 基线外，还需要 Web（server）、Electron 等其他产品客户端。我们把它们统一称为 Client。希望具备以下能力：
+UI 对接层服务 ACP（Agent Client Protocol）／stdio 基线之外的产品客户端，包括 Web 与 Electron。我们把它们统一称为 Client，并要求具备以下能力：
 - 一个 `dsh` 进程同时支持 `dsh web`（启动）和 `dsh --profile headless`（headless），一个进程两种模式（设计预留）
 - 在 Electron 中使用与 `dsh web` 相同的 Web 技术启动
 
-那么当前的工程代码需要稳定的分层职责模型，便于以后接入各类 client。
+工程代码需要稳定的分层职责模型，便于产品 client 干净接入。
 
-同时各消费方的物理通道不同（浏览器 HTTP／WebSocket、进程内 fetch/SSE、将来 IPC），还需要一个通道无关的消息模型和单一约定真源，让「加一个方法」「换一种载体」互不牵连，且 wire 上的每条消息可类型校验、可观测、可对账。
+同时各消费方的物理通道不同（浏览器 HTTP／WebSocket、进程内 fetch/SSE、按 generation 隔离的 Electron IPC），还需要一个通道无关的消息模型和单一约定真源，让「加一个方法」「换一种载体」互不牵连，且 wire 上的每条消息可类型校验、可观测、可对账。
 
 ## Decision
 
@@ -30,7 +30,7 @@ Status: implemented
 - `apps/` 作为对外导出的应用入口，可以由 Client / Host 混合组装。
     - `apps/web`（`dsh-web-frontend`）是 vite 应用：`dsh-client-web` 导出的壳 API 之上的一层薄 `main.ts`。
     - `apps/cli`（`@deepseek-ai/dsh`）分发命令：`dsh web` = Host + webserver + 构建出的 `dsh-web-frontend` dist；`dsh --profile headless` = [直接使用核心 Agent／Session 的入口](2026-08-09-headless-direct-core-entry-point.md)，不含 Host、HTTP 或浏览器层。
-    - 将来的 Electron 应用经由 IPC fetch 载体复用同一套 web client 包。
+    - `apps/desktop` 通过显式 IPC `ClientCarrier` 复用同一套 GUI 客户端包；其四进程与安全规则见 [Desktop 决策](2026-08-16-electron-desktop-process-security-and-release.md)。
 
 ```
 apps/*  (applications: apps/web = vite app, apps/cli = bin dispatch)
@@ -73,7 +73,7 @@ TypeScript 以 solution 根引用的**两个聚合 program** 检查（`tsconfig.
 
 #### 怎么接入一个新应用（操作清单）
 
-1. **选 fetch 伪造方式**：浏览器同源 HTTP / 进程内 `host.handler.fetch` 注入 / 自写传输切面子类（如将来 Electron IPC，见下文「子类表」）。
+1. **选择 carrier**：浏览器同源 HTTP／WebSocket、进程内 `host.handler.fetch`，或 Desktop 的 generation-scoped IPC 实现等产品 carrier（见下文「子类表」）。
 2. **在 `apps/` 下写拼装模块**：`startHost()` + 客户端子类 + 该应用私有的信号/打印/退出语义；混合体不建包，拼装写在 app 里。
 3. **需要 HTTP 承载才 import `dsh-host-webserver`**，否则零端口。
 
@@ -215,8 +215,9 @@ export type ResponseValue<K> =
 |---|---|---|---|
 | `InProcessApiClient` | apiproxy 本包 | 注入的 `{ fetch }` handler | **同构点**：`new InProcessApiClient(toFetchHandler(api))` 全程不过网络但真跑 wire 序列化/zod/SSE 帧；载体测试与调用方可以在不打开端口的情况下运行这套协议，而产品 `dsh --profile headless` 直接驱动 core |
 | `WebApiClient` | dsh-client-connection | `globalThis.fetch` 上行 + 每逻辑流一条同源 WebSocket 下行 | 浏览器客户端；物理边界见 [WebSocket 下行载体](2026-08-04-websocket-downlink-carrier.md) |
+| `CarrierApiClient` | dsh-client-connection | 显式 `ClientCarrier.fetch` 加两条完整信封下行 | 共享产品客户端；在 carrier 创建时固定 authority／base URL，并包含传输生命周期 |
+| `IpcApiClient`／`IpcClientCarrier` | dsh-client-connection | generation-scoped MessagePort unary 与 pull 驱动 stream frame | Desktop 承载；严格外层 frame、取消、请求上限与旧 generation 拒绝 |
 | `FixtureApiClient` | dsh-client-connection | 不用（协议层覆写） | 无 server 的 UI 开发（`?fixture`）：覆写 `callUnary`/`openMux`/`openHost`/`respond` 虚方法，自己就是假 server（帧 rpcId 由它 mint，语义自洽） |
-| IPC 桥子类（假想示例——尚无此形态） | Electron 壳 | IPC 序列化往返 | 只需换 doFetch，约定/基类零改 |
 
 ## 怎么扩展（操作清单）
 

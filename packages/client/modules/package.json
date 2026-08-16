@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-client-modules",
-  "description": "Client module system, dual-face: node half composes the __DSH_BOOT__ entry graph (incremental dsh.client scan, bundle route, index tap, webPlugins service); browser half is the lazy-CJS module table the vendored cordis Loader consumes as its internal seam",
+  "description": "Client module system: transport-neutral Host registry, Web resource adapter, strict Desktop resource manifest, and lazy-CJS client table",
   "version": "0.1.0-rc.5",
   "publishConfig": {
     "access": "public"
@@ -22,6 +22,10 @@
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
+    "./web": {
+      "types": "./lib/types/web.d.ts",
+      "default": "./lib/web.js"
+    },
     "./invariant": {
       "types": "./lib/types/invariant.d.ts",
       "default": "./lib/invariant.js"
@@ -41,6 +45,9 @@
     "watch": "tsdown --watch"
   },
   "license": "MIT",
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
   "devDependencies": {
     "@deepseek-ai/cordis-plugin-loader": "workspace:^",
     "@deepseek-ai/dsh-host-webserver": "workspace:^",
@@ -50,6 +57,7 @@
   "files": [
     "lib/index.js",
     "lib/invariant.js",
+    "lib/web.js",
     "lib/client.js",
     "lib/types/**/*.d.ts"
   ],

@@ -6,7 +6,7 @@
  */
 
 import type { z } from 'zod'
-import type { ApiProxy, HostFrame, MuxFrame } from '../api/index.ts'
+import type { ApiProxy, HostFrame, MuxFrame, PromptUploadPayload } from '../api/index.ts'
 import type { RequestPayload, ResponseValue, RpcMethodMap } from '../api/rpc-map.ts'
 import type { ClientRequest, ClientResponse, RpcMessage, RpcReceipt, RpcRequest, RpcResponse, ServerRequest } from '../api/rpc.ts'
 import { RpcId } from '../api/rpc.ts'
@@ -23,6 +23,7 @@ import {
   sessionCreateValueSchema,
   sessionForkValueSchema,
   sessionHistoryValueSchema,
+  imageMediaTypeSchema,
   sessionListValueSchema,
   sessionModelsValueSchema,
   sessionPromptValueSchema,
@@ -67,6 +68,20 @@ import {
   subagentListValueSchema,
   subagentPromptValueSchema,
 } from '../api/subagents.schema.ts'
+import {
+  PROMPT_UPLOAD_CONTENT_TYPE,
+  PROMPT_UPLOAD_PATH,
+  encodePromptUpload,
+} from './prompt-upload.ts'
+import {
+  ATTACHMENT_BYTES_RPC_HEADER,
+  ATTACHMENT_PREVIEW_MAX_BYTES,
+  attachmentBytesUrl,
+  type AttachmentBlobPayload,
+  type AttachmentBlobValue,
+} from './attachment-bytes.ts'
+
+export type { AttachmentBlobPayload, AttachmentBlobValue } from './attachment-bytes.ts'
 
 /**
  * Client consumption face of the contract (shape a): same domain tree as ApiProxy, but unary
@@ -95,7 +110,9 @@ export interface IApiClient {
     rename(payload: RequestPayload<'session.rename'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.rename'>>>
     fork(payload: RequestPayload<'session.fork'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.fork'>>>
     prompt(payload: RequestPayload<'session.prompt'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.prompt'>>>
+    promptUpload(payload: PromptUploadPayload, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.prompt'>>>
     attachment(payload: RequestPayload<'session.attachment'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.attachment'>>>
+    attachmentBlob(payload: AttachmentBlobPayload, signal?: AbortSignal): Promise<RpcResponse<AttachmentBlobValue>>
     updateQueue(payload: RequestPayload<'session.updateQueue'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.updateQueue'>>>
     cancel(payload: RequestPayload<'session.cancel'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.cancel'>>>
   }
@@ -349,6 +366,95 @@ export abstract class AbstractApiClient implements IApiClient {
     return { rpcId: full.rpcId, result: { ok: true, value } }
   }
 
+  /**
+   * 二进制 Prompt 路径只把小型 Manifest 编为 JSON，图片正文保持原始拉取式字节。
+   * @param payload - 目标会话、文本与可重新打开的图片源。
+   * @param signal - 调用方取消信号。
+   * @returns 与 session.prompt 相同的业务响应。
+   */
+  protected async callPromptUpload(
+    payload: PromptUploadPayload,
+    signal?: AbortSignal,
+  ): Promise<RpcResponse<ResponseValue<'session.prompt'>>> {
+    const rpcId = this.mintRpcId()
+    const encoded = encodePromptUpload(rpcId, payload)
+    const requestSignal = signal === undefined
+      ? AbortSignal.timeout(this.timeoutMs)
+      : AbortSignal.any([AbortSignal.timeout(this.timeoutMs), signal])
+    const response = await this.doFetch(new URL(PROMPT_UPLOAD_PATH, this.resolveBase()), {
+      method: 'POST',
+      headers: { 'content-type': PROMPT_UPLOAD_CONTENT_TYPE },
+      body: encoded.body,
+      signal: requestSignal,
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' })
+    if (!response.ok) throw new Error(`transport failure for ${PROMPT_UPLOAD_PATH}: HTTP ${String(response.status)}`)
+    const full = serverResponseSchema.parse(await response.json())
+    this.onEnvelope(full)
+    if (full.rpcId !== rpcId) {
+      throw new Error(`rpcId mismatch for session.prompt-upload: sent ${rpcId}, got ${full.rpcId}`)
+    }
+    if (!full.result.ok) return { rpcId: full.rpcId, result: full.result }
+    const value = sessionPromptValueSchema.parse(full.result.value) as ResponseValue<'session.prompt'>
+    return { rpcId: full.rpcId, result: { ok: true, value } }
+  }
+
+  /**
+   * 通过只读原始字节路由创建浏览器 Blob，避免附件预览再次经过 JSON/base64。
+   * @param payload - 会话与日志中已有的附件引用。
+   * @param signal - 调用方取消信号。
+   * @returns 经长度、媒体类型和 rpcId 校验的 Blob。
+   */
+  protected async callAttachmentBlob(
+    payload: AttachmentBlobPayload,
+    signal?: AbortSignal,
+  ): Promise<RpcResponse<AttachmentBlobValue>> {
+    const rpcId = this.mintRpcId()
+    const requestSignal = signal === undefined
+      ? AbortSignal.timeout(this.timeoutMs)
+      : AbortSignal.any([AbortSignal.timeout(this.timeoutMs), signal])
+    const response = await this.doFetch(
+      attachmentBytesUrl(
+        this.resolveBase(),
+        rpcId,
+        payload.sessionId,
+        payload.attachment.attachmentId,
+        payload.purpose,
+      ),
+      { signal: requestSignal },
+    )
+    if (!response.ok) throw new Error(`transport failure for session.attachment-bytes: HTTP ${String(response.status)}`)
+    const mediaType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
+    if (mediaType === 'application/json') {
+      const full = serverResponseSchema.parse(await response.json())
+      this.onEnvelope(full)
+      if (full.rpcId !== rpcId) {
+        throw new Error(`rpcId mismatch for session.attachment-bytes: sent ${rpcId}, got ${full.rpcId}`)
+      }
+      if (full.result.ok) throw new Error('session.attachment-bytes returned JSON success without bytes')
+      return { rpcId: full.rpcId, result: full.result }
+    }
+    if (response.headers.get(ATTACHMENT_BYTES_RPC_HEADER) !== rpcId) {
+      throw new Error('rpcId mismatch for session.attachment-bytes binary response')
+    }
+    const purpose = payload.purpose ?? 'original'
+    if (!imageMediaTypeSchema.safeParse(mediaType).success
+      || (purpose === 'original' && mediaType !== payload.attachment.mediaType)) {
+      throw new Error(`media type mismatch for session.attachment-bytes: expected ${payload.attachment.mediaType}, got ${String(mediaType)}`)
+    }
+    const declaredLength = Number(response.headers.get('content-length'))
+    if (!Number.isSafeInteger(declaredLength) || declaredLength <= 0
+      || (purpose === 'original' && declaredLength !== payload.attachment.bytes)
+      || (purpose === 'thumbnail' && declaredLength > ATTACHMENT_PREVIEW_MAX_BYTES)) {
+      throw new Error('content length mismatch for session.attachment-bytes')
+    }
+    const data = await response.blob()
+    if (data.size !== declaredLength || data.type !== mediaType) {
+      throw new Error('blob metadata mismatch for session.attachment-bytes')
+    }
+    return { rpcId, result: { ok: true, value: { attachment: payload.attachment, data } } }
+  }
+
   /** Mux stream opener; virtual for the same override reason as callUnary. */
   protected openMux(_payload: Parameters<ApiProxy['events']['mux']>[0]['payload'], signal: AbortSignal, onOpen?: () => void): AsyncIterable<RpcRequest<MuxFrame>> {
     return this.readSse('/api/events.mux', signal, muxFrameSchema, onOpen)
@@ -419,7 +525,9 @@ export abstract class AbstractApiClient implements IApiClient {
     rename: (payload, signal) => this.callUnary('session.rename', payload, signal),
     fork: (payload, signal) => this.callUnary('session.fork', payload, signal),
     prompt: (payload, signal) => this.callUnary('session.prompt', payload, signal),
+    promptUpload: (payload, signal) => this.callPromptUpload(payload, signal),
     attachment: (payload, signal) => this.callUnary('session.attachment', payload, signal),
+    attachmentBlob: (payload, signal) => this.callAttachmentBlob(payload, signal),
     updateQueue: (payload, signal) => this.callUnary('session.updateQueue', payload, signal),
     cancel: (payload, signal) => this.callUnary('session.cancel', payload, signal),
   }

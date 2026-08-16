@@ -99,24 +99,28 @@ interface ImageBlock {
 
 `ImageBlock` joins the merge-extensible core `ContentBlockMap` and is valid in either user or assistant content. It never carries base64, an object URL, a filesystem path, or a provider-owned locator. This keeps the session event plus immutable object store sufficient to reconstruct the exact model-visible image. The LLM vocabulary therefore has a type-only dependency on the attachment seam; provider runtime dependencies remain adapter-specific.
 
-The browser cannot mint a durable reference, so `session.prompt` accepts a narrow intake union rather than canonical `ContentBlock[]`:
+The browser cannot mint a durable reference, so the GUI image path accepts reopenable raw-byte sources rather than canonical `ContentBlock[]`:
 
 ```ts
 export {}
 
-type PromptInputPart =
+interface PromptUploadImageSource {
+  mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+  bytes: number
+  name?: string
+  stream(): ReadableStream<Uint8Array>
+}
+
+type PromptUploadContentPart =
   | { type: 'text'; text: string }
-  | {
-      type: 'image'
-      mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
-      data: string
-      name?: string
-    }
+  | { type: 'image'; source: PromptUploadImageSource }
 ```
 
-Base64 crosses JSON-RPC once and is discarded after persistence. The host validates canonical base64, image count, aggregate bytes, individual bytes, the declared MIME against a fully decoded raster, intrinsic dimensions, and decoded-pixel count. It awaits the seam's storage-free `validateImage` for every batch member before saving any member, so one malformed image cannot strand the batch's valid members as unreferenced objects. Storage commits then run in submission order to bound full-raster decoder memory. If a later storage I/O operation fails, the host appends no user event, but an earlier immutable content-addressed object may remain unreferenced; version one leaves cleanup to future reference-aware garbage collection instead of adding destructive rollback to the deduplicated store. Only after every image succeeds does it call the agent with normalized text and durable image blocks in the submitted order. A failure exposes no attachment path or raw bytes.
+The production client sends a bounded JSON manifest followed by raw image bytes and opens a fresh `File.stream()` for every submission attempt. The Web carrier still buffers the physical `node:http` body before dispatch, while Desktop IPC pulls at most one 1 MiB chunk at a time; neither path copies the image batch through JSON/base64 or numeric arrays. The unary JSON `session.prompt` remains available to typed in-process callers, but assembled GUI image intake uses the binary route.
 
-`session.attachment` is a read-only, session-scoped endpoint. The host serves bytes only when a durable event in that session references the requested attachment identifier. The client deduplicates loads by session and attachment identifier while that session is rendered, revokes resolved URLs on rendered-session disposal, and rejects invalidated late loads before allocating an object URL so an unmounted session or disposed service cannot repopulate the cache.
+The host validates image count, aggregate bytes, individual bytes, declared MIME against a fully decoded raster, intrinsic dimensions, and decoded-pixel count. `prepareImages` consumes exact-length sources in submission order, and the local provider stages one image at a time on disk while the same full decode produces a bounded 480px WebP derivative. No content-addressed object is published until the entire batch has passed admission and the physical request has proven there are no trailing bytes. If a later publication I/O operation fails, the host appends no user event, but an earlier immutable content-addressed object may remain unreferenced; version one leaves cleanup to future reference-aware garbage collection instead of adding destructive rollback to the deduplicated store. Only after every image succeeds does it call the agent with normalized text and durable image blocks in submitted order. A failure exposes no attachment path or raw bytes. The Utility-owned local provider disables libvips caching so completed batches do not leave native memory proportional to prior attachment volume.
+
+The attachment byte route is read-only and session-scoped. The host serves bytes only when a durable event in that session references the requested attachment identifier. A thumbnail request uses the UI-only WebP derivative, generating it on demand for objects written before previews existed; an original request reads the canonical content-addressed object. The client deduplicates loads by session, attachment identifier, and purpose, serializes thumbnail work, revokes resolved URLs on rendered-session disposal, and rejects invalidated late loads before allocating an object URL so an unmounted session or disposed service cannot repopulate the cache.
 
 ### Model capabilities and provider behavior
 
@@ -134,36 +138,36 @@ Compaction replays the selected conversation prefix, including image references,
 
 ### History rendering and original preview
 
-History folding preserves `ImageBlock` in both user and assistant messages. User images align to the trailing edge above their text; assistant images remain in their original content-block position in the leading narration flow. `MessageImage` derives a stable inline box from recorded dimensions, resolves bytes through the session-authorized loader, uses `object-fit: contain`, and turns a missing or corrupt object into a retryable error control.
+History folding preserves `ImageBlock` in both user and assistant messages. User images align to the trailing edge above their text; assistant images remain in their original content-block position in the leading narration flow. `MessageImage` derives a stable inline box from recorded dimensions, requests a thumbnail only when it enters a 256px viewport lookahead, uses bounded `object-fit: cover` presentation, and turns a missing or corrupt object into a retryable error control. Composer rail images bind their Blob URL only near the horizontal viewport; both surfaces request lazy asynchronous browser decoding.
 
-Composer thumbnails and each `MessageImage` own ephemeral original-preview state and invoke the same pure `ImageLightbox`. The modal uses the already resolved original object URL, constrains only display size, focuses its close control, and restores the previous focus target when closed.
+Composer thumbnails and each `MessageImage` own ephemeral preview state and invoke the same pure `ImageLightbox`. A history lightbox opens immediately with the ready thumbnail, then requests and swaps in the original; failure retains the thumbnail and a later open retries. The modal constrains only display size, focuses its close control, and restores the previous focus target when closed.
 
 ### Limits and trust boundaries
 
-Version one accepts PNG, JPEG, WebP, and GIF only. SVG and remote URLs are excluded. Default limits are 5 MiB per image, 20 images and 100 MiB aggregate image bytes per message, and 40 million intrinsic pixels per image. These deployment-varying limits are validated backend configuration and enforced by the host before persistence. The client connection carrier has an independent configurable `maxRequestBodyBytes` cap (160 MiB by default) for every API request and fails load if it cannot hold the attachment service's aggregate image limit after base64 and envelope expansion; lowering image policy therefore never silently lowers the carrier limit for valid text or other RPCs. A body without a declared length is rejected the moment it crosses the cap rather than drained to its end.
+Version one accepts PNG, JPEG, WebP, and GIF only. SVG and remote URLs are excluded. Default limits are 5 MiB per image, 20 images and 100 MiB aggregate image bytes per message, and 40 million intrinsic pixels per image. These deployment-varying limits are validated backend configuration and enforced by the host before persistence. The Web connection adapter has an independent configurable `maxRequestBodyBytes` cap (160 MiB by default) for every API request and fails load if it cannot hold the attachment service's raw aggregate image limit plus the fixed-length prefix and bounded manifest. Its `node:http` bridge rejects an undeclared body the moment it crosses the cap rather than draining it. Desktop enforces the same request limit cumulatively while retaining only bounded in-flight IPC chunks.
 
-Malformed base64, unsupported or mismatched media, truncated image payloads, excess bytes, excess image count, excess pixels, missing objects, and integrity mismatches return stable structured failures. Original filenames are reduced to a display basename, control characters are removed, and no local path is logged or returned to the browser.
+Malformed manifests, declared/actual length mismatches, trailing bytes, unsupported or mismatched media, truncated image payloads, excess bytes, excess image count, excess pixels, missing objects, and integrity mismatches return stable structured failures. Original filenames are reduced to a display basename, control characters are removed, and no local path is logged or returned to the browser.
 
 ### Package and surface changes
 
 | Surface | Responsibility |
 | --- | --- |
 | `packages/attachment/attachment` | Opaque attachment identifier, image reference, limits, failures, and `ctx.attachments` service. |
-| `packages/attachment/attachment-local` | Private content-addressed storage, complete raster decoding, integrity verification, and configuration. |
+| `packages/attachment/attachment-local` | Private content-addressed storage, disk staging, bounded preview derivatives, complete raster decoding, integrity verification, and configuration. |
 | `packages/llm/llm` | Role-neutral `ImageBlock` and input-modality metadata. |
 | `packages/llm/llm-pi-ai` | Resolve durable supported image input into native provider content. |
 | `packages/llm/llm-deepseek` | Reject image content explicitly. |
 | `packages/compaction/compaction-basic` | Preserve images in summary input and reject non-text checkpoint output explicitly. |
 | `packages/host/apiproxy` and `packages/bundle/base` | Narrow upload wire, persist-before-event ordering, session-authorized reads, limits and model preflight, plus default profile composition. |
-| `packages/client/connection` and `packages/client/runtime` | Bounded request buffering, wire types, fixture images, prompt uploads, attachment reads, and durable-reference folding. |
-| `packages/client/ui-conversation` | Per-session draft images, attachment rail, user and assistant image controls, and original preview. |
+| `packages/client/connection` and `packages/client/runtime` | Web request bounds, Desktop IPC streaming, binary prompt uploads, purpose-aware attachment reads, fixture images, and durable-reference folding. |
+| `packages/client/ui-attachment` and `packages/client/ui-conversation` | Per-session draft images, viewport-lazy rails and history thumbnails, purpose-aware URL lifetime, and on-demand original preview. |
 | `packages/acp/acp` | Explicit fallback rendering for image blocks. |
 
 The attachment packages form the interface/implementation side of one capability seam. Composer behavior stays in the conversation object layer, provider conversion stays in adapters, and no change is required in `agent-loop`.
 
 ### Implementation
 
-The implemented slice includes the attachment seam, role-neutral image block, Pi-AI input conversion, DeepSeek rejection, durable host ordering, Web upload/read protocol, current image-limit enforcement, bounded Web request bodies, in-memory draft images, paste/drop rail, user and assistant history rendering, single-click preview, compaction handling, and keyless assembled Web coverage.
+The implemented slice includes the attachment seam, role-neutral image block, Pi-AI input conversion, DeepSeek rejection, durable host ordering, raw binary Web/Desktop upload and read protocols, current image-limit enforcement, disk staging and preview derivation, bounded Web request bodies and Desktop IPC chunks, in-memory draft images, viewport-lazy paste/drop rail, user and assistant history thumbnails, on-demand original preview, compaction handling, and keyless assembled Web coverage.
 
 No compatibility shim is required for the pre-release prompt wire; all call sites and fixtures change with the introducing slice.
 
@@ -195,9 +199,9 @@ UI state can be stale and does not protect direct SDK, ACP, replay, or uncatalog
 
 ## Testing
 
-- Storage tests cover content-addressed deduplication, private permissions, admission failures, corruption/missing-object failures, and reading history after deployment limits are lowered.
-- Host and protocol tests cover persist-before-event ordering, absence of base64 in logs, session-scoped authorization, capability rejection, upload limits, bounded HTTP request bodies, image-admission/model-selection races (queued and steering placements), pending publication, idle release without publication, text-only queue edits, and selection against current derived history after compaction.
-- Client unit tests cover paste and drop, mixed clipboard text, image-only send, draft restoration, ordering, draft/session-scope/application object-URL cleanup, and a deferred historical read that completes after disposal; the keyless assembled built-client lane (`apps/web/tests/image-display.snapshot.ts`, `DSH_EXAMPLE_MODE=lib pnpm run test:snapshot`) covers the historical user and assistant galleries over the authorized attachment route, the original-size lightbox, and the composer paste rail.
+- Storage tests cover exact-length streamed admission, all-before-publication batching, content-addressed deduplication, private permissions, bounded preview generation, old-object fallback, corruption/missing-object failures, and reading history after deployment limits are lowered.
+- Host and protocol tests cover persist-before-event ordering, absence of base64 in logs and the binary product route, session-scoped authorization, thumbnail/original selection, capability rejection, upload limits, bounded Web bodies and IPC chunks, small-chunk coalescing, image-admission/model-selection races (queued and steering placements), pending publication, idle release without publication, text-only queue edits, and selection against current derived history after compaction.
+- Client unit tests cover paste and drop, mixed clipboard text, image-only send, fresh retry streams, draft restoration, ordering, lazy rail/history activation, purpose-aware draft/session-scope/application object-URL cleanup, and deferred reads that complete after disposal; the keyless assembled built-client lane (`apps/web/tests/image-display.snapshot.ts`, `DSH_EXAMPLE_MODE=lib pnpm run test:snapshot`) covers the historical user and assistant galleries over the authorized attachment route, the original-size lightbox, and the composer paste rail. Installed Desktop acceptance submits twenty 5 MiB images through the production carrier and keeps the measured three-process peak RSS increase below 300 MiB.
 - Adapter and compaction tests cover native Pi-AI image conversion, late attachment-service composition, text-only rejection, recursively nested tool-result images, preserved summary input, and explicit image-output rejection.
 - A credentialed real-API test sends a PNG through the Anthropic `claude-opus-4-8` route and requires the model to identify its QR code.
 - The current production adapter set has no certified image-output route; output-provider certification remains outside version one.
@@ -206,9 +210,9 @@ UI state can be stale and does not protect direct SDK, ACP, replay, or uncatalog
 
 - Durable storage grows without garbage collection. Version one chooses replay safety over premature deletion.
 - A missing or corrupt object makes exact model reconstruction fail. Failing loud preserves integrity but may prevent that session from continuing until repaired.
-- JSON-RPC base64 adds upload memory and roughly one-third encoding overhead. Version-one limits bound it; larger media needs streaming or a binary transport.
+- The Web `node:http` bridge still holds one complete raw upload request before Fetch dispatch. Desktop IPC streams the same body with one bounded chunk in flight; reducing Web residency further requires a streaming HTTP bridge.
 - Unsent images do not survive reload. Durable drafts need quota and orphan cleanup rather than reusing message storage implicitly.
-- Original preview decodes more pixels than the inline control displays. Pixel limits, one clicked preview, and object-URL disposal bound but do not eliminate transient browser memory.
+- Preview derivatives add bounded disk usage beside canonical objects. Original decoding occurs only after an explicit lightbox open; pixel limits, one clicked preview, serialized thumbnail work, and object-URL disposal bound but do not eliminate transient browser memory.
 - Capability metadata may be missing or stale. Host preflight improves feedback, while adapter enforcement remains authoritative.
 - A future output provider may require authenticated retrieval before an assistant image can complete, adding latency and a new failure point. Persist-before-event ordering favors replay integrity.
 - File picking, generic files/PDF, audio/video, durable draft staging, image copying, custom context menus, output-provider certification, and reference-aware garbage collection remain independent designs.

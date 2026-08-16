@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { ImageGallery, MessageImage } from '../src/MessageImage.tsx'
 import type { MessageImageLabels } from '../src/MessageImage.tsx'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 const labels: MessageImageLabels = {
   image: '图片',
@@ -27,6 +30,39 @@ const attachment = {
 }
 
 describe('MessageImage', () => {
+  it('接近可见区后才加载缩略图，打开灯箱时再加载原图', async () => {
+    let intersect: (() => void) | undefined
+    const disconnect = vi.fn()
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(callback: IntersectionObserverCallback) {
+        intersect = () => { callback([{ isIntersecting: true } as IntersectionObserverEntry], this as never) }
+      }
+
+      observe(): void {}
+      disconnect(): void { disconnect() }
+      unobserve(): void {}
+      takeRecords(): IntersectionObserverEntry[] { return [] }
+      readonly root = null
+      readonly rootMargin = '256px 0px'
+      readonly thresholds = [0]
+    })
+    const load = vi.fn((_image, purpose) => Promise.resolve(`blob:${String(purpose)}`))
+    const view = render(<MessageImage attachment={attachment} load={load} variant="single" labels={labels} />)
+
+    expect(load).not.toHaveBeenCalled()
+    act(() => { intersect?.() })
+    await waitFor(() => { expect(view.getByAltText('history.png').getAttribute('src')).toBe('blob:thumbnail') })
+    expect(load).toHaveBeenCalledWith(attachment, 'thumbnail')
+
+    fireEvent.click(view.getByRole('button', { name: 'history.png，点击查看原图' }))
+    await waitFor(() => {
+      expect(view.getByRole('dialog', { name: '原图预览' }).querySelector('img')?.getAttribute('src'))
+        .toBe('blob:original')
+    })
+    expect(load).toHaveBeenCalledWith(attachment, 'original')
+    expect(disconnect).toHaveBeenCalled()
+  })
+
   it('loads a session-authorized URL, bounds the thumbnail, and clicks into the original', async () => {
     const load = vi.fn().mockResolvedValue('blob:history')
     const view = render(<MessageImage attachment={attachment} load={load} variant="single" labels={labels} />)
@@ -35,7 +71,7 @@ describe('MessageImage', () => {
     expect(frame.getAttribute('style')).toContain('height: 120px')
     expect(frame.getAttribute('title')).toBe('查看原图')
     await waitFor(() => { expect(view.getByAltText('history.png')).toBeTruthy() })
-    expect(load).toHaveBeenCalledWith(attachment)
+    expect(load).toHaveBeenCalledWith(attachment, 'thumbnail')
     fireEvent.click(frame)
     expect(view.getByRole('dialog', { name: '原图预览' })).toBeTruthy()
     fireEvent.click(view.getByRole('button', { name: '关闭原图预览' }))
