@@ -2,6 +2,7 @@
  * by edge arrows, hover-revealed per-item remove, single-click open. */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { RefObject } from 'react'
 import clsx from 'clsx'
 import {
   IconChevronLeftOutline14, IconChevronRightOutline14, IconCloseFill14,
@@ -35,6 +36,38 @@ export interface AttachmentRailLabels {
 /** Approximate pixels per wheel step for `deltaMode` LINE deltas (Firefox
  * notch wheels report lines, not pixels). */
 const WHEEL_LINE_PX = 16
+
+/** 只在图片接近横向轨道视口时绑定 Blob URL 并触发浏览器解码。 */
+function LazyRailThumbnail({ item, rail }: {
+  item: AttachmentRailItem
+  rail: RefObject<HTMLDivElement | null>
+}) {
+  const imageRef = useRef<HTMLImageElement | null>(null)
+  const [visible, setVisible] = useState(() => typeof IntersectionObserver === 'undefined')
+  useEffect(() => {
+    if (visible) return
+    const image = imageRef.current
+    const root = rail.current
+    if (image === null || root === null) return
+    // 只激活横向轨道附近的 Blob URL，避免大批草稿在发送前同时进入 Chromium 图片缓存。
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some(entry => entry.isIntersecting)) return
+      observer.disconnect()
+      setVisible(true)
+    }, { root, rootMargin: '0px 128px' })
+    observer.observe(image)
+    return () => { observer.disconnect() }
+  }, [rail, visible])
+  return (
+    <img
+      ref={imageRef}
+      loading="lazy"
+      decoding="async"
+      src={visible ? item.previewUrl : undefined}
+      alt={item.alt}
+    />
+  )
+}
 
 /** Smooth paging unless the user asked for reduced motion. */
 function pageBehavior(): ScrollBehavior {
@@ -172,7 +205,7 @@ export function AttachmentRail<T extends AttachmentRailItem>({ items, labels, on
               title={labels.open}
               onClick={() => { onOpen(item) }}
             >
-              <img src={item.previewUrl} alt={item.alt} />
+              <LazyRailThumbnail item={item} rail={railRef} />
             </button>
             <button
               type="button"

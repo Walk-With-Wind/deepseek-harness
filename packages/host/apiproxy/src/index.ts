@@ -25,10 +25,16 @@ import {
 export type * from './api/index.ts'
 export { RpcId } from './api/rpc.ts'
 export { toFetchHandler } from './fetch/handler.ts'
+export {
+  PROMPT_UPLOAD_LENGTH_PREFIX_BYTES,
+  PROMPT_UPLOAD_MAX_MANIFEST_BYTES,
+  PROMPT_UPLOAD_MAX_OVERHEAD_BYTES,
+} from './fetch/prompt-upload.ts'
 export { AbstractApiClient, InProcessApiClient } from './fetch/client.ts'
 export type { IApiClient } from './fetch/client.ts'
 export { createApiProxy } from './api-proxy.ts'
 export type { ApiProxyDefaults } from './api-proxy.ts'
+export { openNativePath, openNativeTextFile } from './native-path-opener.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -60,6 +66,12 @@ export interface Config {
    */
   coldBlankProbeMaxBytes?: number
 }
+
+/** 产品宿主可覆盖的原生路径能力；业务 API 与默认模型配置仍由共享 Gateway 所有。 */
+export type ApiProxyNativeOverrides = Pick<
+  import('./api-proxy.ts').ApiProxyDefaults,
+  'authorizeOpenPath' | 'canOpenPath' | 'openPath' | 'openTextFile'
+>
 
 /**
  * The API gateway service: implements the ApiProxy contract over the composed
@@ -93,7 +105,7 @@ export class ApiProxyService extends Service implements ApiProxy {
   readonly downloads: ApiProxy['downloads']
   readonly respond: ApiProxy['respond']
 
-  constructor(ctx: Context, config: Config) {
+  constructor(ctx: Context, config: Config, nativeOverrides: ApiProxyNativeOverrides = {}) {
     super(ctx, 'apiProxy')
     const api = createApiProxy(ctx, {
       defaultModelSelection: () => ctx.agentDefaultModel.currentSelection(),
@@ -106,6 +118,7 @@ export class ApiProxyService extends Service implements ApiProxy {
       ...(config.coldBlankProbeMaxBytes === undefined
         ? {}
         : { coldBlankProbeMaxBytes: config.coldBlankProbeMaxBytes }),
+      ...nativeOverrides,
     })
     this.sessions = api.sessions
     this.subagents = api.subagents

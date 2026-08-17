@@ -67,6 +67,14 @@ describe('client bundle purity gate', () => {
     expect(resolveId('zod')).toBeNull()
   })
 
+  it('把 Zod 作为平台单例提供给全部客户端 bundle', () => {
+    const [config] = clientConfigs()
+    expect(CLIENT_EXTERNALS).toContain('zod')
+    expect(config?.deps?.neverBundle).toContain('zod')
+    expect(config?.deps?.alwaysBundle).toBeTypeOf('function')
+    expect((config?.deps?.alwaysBundle as (id: string) => unknown)('zod')).toBeUndefined()
+  })
+
   it('rejects retired table entries (web-react/store left the 8-entry seed)', () => {
     expect(() => resolveId('@deepseek-ai/dsh-client-web-react/store')).toThrow(/purity/)
   })

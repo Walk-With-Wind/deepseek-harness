@@ -52,7 +52,16 @@ const releaseMemberDirectory = /^(?:packages\/[^/]+\/[^/]+|apps\/[^/]+|vendor\/[
 
 const localArtifactDirs = new Set(['node_modules'])
 const appPackageFiles: Readonly<Record<string, readonly string[]>> = {
-  '@deepseek-ai/dsh': ['lib/*.js', 'config'],
+  // CLI 不再拥有 GUI preset 目录；共享 GUI bundle 是唯一发布来源。
+  '@deepseek-ai/dsh': ['lib/*.js'],
+  '@deepseek-ai/dsh-desktop': [
+    'lib/*.js',
+    'lib/preload.cjs',
+    'renderer',
+    'desktop.config.json',
+    'cordis.patch.yml',
+    'assets',
+  ],
   // The Web build emits sourcemaps for browser debugging; publishing them is
   // what the payload policy forbids, so the bundle ships without them.
   '@deepseek-ai/dsh-web-frontend': ['dist', '!dist/**/*.map'],
@@ -133,6 +142,8 @@ function workspaceManifests(): WorkspaceManifest[] {
 const packageFileExtras: Readonly<Record<string, readonly string[]>> = {
   // Profile bundles publish their dsh.bundle.patch layer beside the lib.
   '@deepseek-ai/dsh-base': ['cordis.patch.yml'],
+  // 共享 GUI bundle 同时交付部署方拥有的 preset roster。
+  '@deepseek-ai/dsh-gui-app': ['cordis.patch.yml', 'agent-presets'],
   '@deepseek-ai/dsh-web-app': ['cordis.patch.yml'],
   '@deepseek-ai/dsh-headless': ['cordis.patch.yml'],
   '@deepseek-ai/dsh-client-ui-theme': ['lib/styles'],
@@ -160,11 +171,15 @@ function expectedDshPackageFiles(manifest: PackageManifest): readonly string[] {
     'lib/invariant.js',
     ...manifest.bin ? ['lib/bin.js'] : [],
     ...manifest.exports?.['./worker'] ? ['lib/worker.cjs'] : [],
+    // 物理 Web adapter 可作为独立 Cordis 行叠加在进程中立的包根 core 之后。
+    ...exportDefault(manifest, './web') === './lib/web.js' ? ['lib/web.js'] : [],
     // UI plugin packages ship their browser bundle beside the node lib
     // (single-artifact ruling: dist/ retired, ./client resolves lib/client.js).
     // Keyed on the artifact path, not the subpath name: apiproxy's ./client is
     // a browser-safe source channel, not a bundle.
     ...exportDefault(manifest, './client') === './lib/client.js' ? ['lib/client.js'] : [],
+    // IPC Host adapter 是独立 Node bundle，Desktop Utility 不加载浏览器入口。
+    ...exportDefault(manifest, './ipc-host') === './lib/ipc-host.js' ? ['lib/ipc-host.js'] : [],
     // runtime's shell-held loader subpath ships as its own bundle beside the client half.
     ...exportDefault(manifest, './loader') === './lib/loader.js' ? ['lib/loader.js'] : [],
     // web-react's store subpath ships its own bundle (single-entry builds; no shared chunk).

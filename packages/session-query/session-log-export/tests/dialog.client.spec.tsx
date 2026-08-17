@@ -12,7 +12,7 @@ const SID = 'session-export-dialog' as SessionId
 
 function bench(
   controller = new SessionLogDownloadController(
-    async () => new Response('zip', { status: 200 }), vi.fn(),
+    { save: () => Promise.resolve('saved') },
   ),
 ) {
   const dismiss = vi.fn((sessionId: SessionId) => { controller.dismiss(sessionId) })
@@ -47,14 +47,14 @@ describe('SessionLogDownloadDialog', () => {
   })
 
   it('renders the in-flight state and the settled browser download state', async () => {
-    let release!: (response: Response) => void
-    const pending = new Promise<Response>((resolve) => { release = resolve })
-    const controller = new SessionLogDownloadController(() => pending, vi.fn())
+    let release!: (outcome: 'saved') => void
+    const pending = new Promise<'saved'>((resolve) => { release = resolve })
+    const controller = new SessionLogDownloadController({ save: () => pending })
     const b = bench(controller)
 
     const download = controller.download(SID)
     expect(await b.view.findByRole('dialog', { name: 'Exporting Session' })).toBeTruthy()
-    release(new Response('zip', { status: 200 }))
+    release('saved')
     await download
     expect(await b.view.findByRole('dialog', { name: 'Session download started' })).toBeTruthy()
   })

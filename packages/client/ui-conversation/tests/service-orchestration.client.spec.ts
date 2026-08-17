@@ -4,7 +4,7 @@
 // service's scopeOf/binding path runs against production resolution (no local
 // tag probe).
 import { Context } from '@deepseek-ai/cordis'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { makeTranslate, SlotTestRuntime } from '@deepseek-ai/dsh-client-test-runtime'
 import type { QueuedMessage, SessionFace } from '@deepseek-ai/dsh-client-runtime/client'
@@ -13,15 +13,21 @@ import { InputHub } from '../src/client/input/hub.ts'
 import { ConversationController, UnsupportedImageMediaTypeError } from '../src/client/service.ts'
 import { zh } from '../src/client/locales.ts'
 
+afterEach(() => { vi.unstubAllGlobals() })
+
 async function bench(readAttachment?: SessionFace['readAttachment']) {
   const runtime = await SlotTestRuntime.create()
   const prompt = vi.fn(() => Promise.resolve({ ok: true as const, value: { accepted: true as const } }))
+  const promptUpload = vi.fn((
+    _content: Parameters<SessionFace['promptUpload']>[0],
+    _mode: Parameters<SessionFace['promptUpload']>[1],
+  ) => Promise.resolve({ ok: true as const, value: { accepted: true as const } }))
   const updateQueue = vi.fn(() => Promise.resolve({ ok: true as const, value: { accepted: true as const } }))
   const cancel = vi.fn(() => Promise.resolve({ ok: true as const, value: { accepted: true as const } }))
   const loadOlder = vi.fn(() => Promise.resolve())
   await runtime.sessions.add({
     id: 's1',
-    session: { prompt, updateQueue, cancel, loadOlder, ...(readAttachment === undefined ? {} : { readAttachment }) },
+    session: { prompt, promptUpload, updateQueue, cancel, loadOlder, ...(readAttachment === undefined ? {} : { readAttachment }) },
   })
   // config.input is required (the apply shares its hub with the inject
   // factories); the bench passes its own instance explicitly.
@@ -34,7 +40,7 @@ async function bench(readAttachment?: SessionFace['readAttachment']) {
   const root = runtime.ctx.get('conversation') as ConversationController
   const scoped = runtime.sessions.scope('s1')!.get('conversation') as ConversationController
   const shell = hub.shellFor(runtime.sessions.binding('s1')!)
-  return { runtime, fiber, root, scoped, hub, shell, prompt, updateQueue, cancel, loadOlder }
+  return { runtime, fiber, root, scoped, hub, shell, prompt, promptUpload, updateQueue, cancel, loadOlder }
 }
 
 describe('ConversationController', () => {
@@ -49,6 +55,50 @@ describe('ConversationController', () => {
     expect(b.cancel).toHaveBeenCalledOnce()
     expect(b.loadOlder).toHaveBeenCalledOnce()
     await b.runtime.dispose()
+  })
+
+  it('把草稿图片作为可重开的原始字节流提交，不生成 base64 字段', async () => {
+    const b = await bench()
+    const created = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:draft-upload')
+    const revoked = vi.spyOn(URL, 'revokeObjectURL').mockReturnValue(undefined)
+    try {
+      const file = new File([Uint8Array.of(1, 2, 3)], 'a.png', { type: 'image/png' })
+      Object.defineProperty(file, 'stream', {
+        value: () => new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(Uint8Array.of(1, 2, 3))
+            controller.close()
+          },
+        }),
+      })
+      const [attachment] = b.root.createDraftImages([
+        file,
+      ])
+      if (attachment === undefined) throw new Error('draft attachment missing')
+      await b.scoped.sendSession(
+        b.runtime.sessions.behavior('s1'),
+        '说明',
+        [attachment.id],
+        'queue',
+      )
+      expect(b.prompt).not.toHaveBeenCalled()
+      expect(b.promptUpload).toHaveBeenCalledOnce()
+      const [content] = b.promptUpload.mock.calls[0] ?? []
+      const image = content?.[0]
+      expect(image).toMatchObject({
+        type: 'image',
+        source: { mediaType: 'image/png', bytes: 3, name: 'a.png' },
+      })
+      if (image?.type !== 'image') throw new Error('binary image source missing')
+      await expect(new Response(image.source.stream()).arrayBuffer())
+        .resolves.toEqual(Uint8Array.of(1, 2, 3).buffer)
+      expect('data' in image).toBe(false)
+      expect(revoked).toHaveBeenCalledWith('blob:draft-upload')
+    } finally {
+      created.mockRestore()
+      revoked.mockRestore()
+      await b.runtime.dispose()
+    }
   })
 
   it('folds Session business failures into callback rejections', async () => {
@@ -124,9 +174,60 @@ describe('ConversationController', () => {
     } as const
     const pending = b.root.resolveImage(sessionId, attachment)
     b.root.releaseSessionImages(sessionId)
-    read.resolve({ ok: true, value: { attachment, data: Uint8Array.of(1) } })
+    read.resolve({
+      ok: true,
+      value: { attachment, data: new Blob([Uint8Array.of(1)], { type: 'image/png' }) },
+    })
     await expect(pending).rejects.toThrow('historical image scope was released')
     await b.runtime.dispose()
+  })
+
+  it('串行读取历史缩略图，避免多张原图同时聚合在 Renderer', async () => {
+    const reads = [
+      Promise.withResolvers<Awaited<ReturnType<SessionFace['readAttachment']>>>(),
+      Promise.withResolvers<Awaited<ReturnType<SessionFace['readAttachment']>>>(),
+    ]
+    const readAttachment = vi.fn(() => {
+      const next = reads[readAttachment.mock.calls.length - 1]
+      if (next === undefined) throw new Error('unexpected thumbnail read')
+      return next.promise
+    })
+    const b = await bench(readAttachment)
+    const sessionId = b.runtime.sessions.behavior('s1').sessionId
+    const first = {
+      attachmentId: AttachmentId('image-1'), mediaType: 'image/png', bytes: 1, width: 1, height: 1,
+    } as const
+    const second = { ...first, attachmentId: AttachmentId('image-2') }
+
+    const firstPending = b.root.resolveImage(sessionId, first, 'thumbnail')
+    const secondPending = b.root.resolveImage(sessionId, second, 'thumbnail')
+    await vi.waitFor(() => { expect(readAttachment).toHaveBeenCalledOnce() })
+    reads[0]?.resolve({ ok: false, error: { code: 'offline', message: 'offline', details: {} } } as never)
+    await expect(firstPending).rejects.toThrow('offline')
+    await vi.waitFor(() => { expect(readAttachment).toHaveBeenCalledTimes(2) })
+    reads[1]?.resolve({ ok: false, error: { code: 'offline', message: 'offline', details: {} } } as never)
+    await expect(secondPending).rejects.toThrow('offline')
+    await b.runtime.dispose()
+  })
+
+  it('使用 Host 派生的缩略图正文创建列表 URL，不在 Renderer 读取原图', async () => {
+    const attachment = {
+      attachmentId: AttachmentId('image-thumbnail'), mediaType: 'image/png', bytes: 1, width: 640, height: 320,
+    } as const
+    const thumbnail = new Blob([Uint8Array.of(2)], { type: 'image/webp' })
+    const readAttachment = vi.fn(() => Promise.resolve({ ok: true as const, value: { attachment, data: thumbnail } }))
+    const created = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:thumbnail')
+    const b = await bench(readAttachment)
+    try {
+      const sessionId = b.runtime.sessions.behavior('s1').sessionId
+      await expect(b.root.resolveImage(sessionId, attachment, 'thumbnail'))
+        .resolves.toBe('blob:thumbnail')
+      expect(readAttachment).toHaveBeenCalledWith(attachment, 'thumbnail')
+      expect(created).toHaveBeenCalledWith(thumbnail)
+    } finally {
+      created.mockRestore()
+      await b.runtime.dispose()
+    }
   })
 
   it('fails loudly from the root scope, on an unbound session, or without SessionRuntime', async () => {

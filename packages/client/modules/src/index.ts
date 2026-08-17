@@ -1,40 +1,39 @@
 /**
- * Node half of the client module system (`dsh.client` dual-face package): scans
- * the host Loader's entries for packages declaring `dsh.client`, composes the
- * `window.__DSH_BOOT__` entry graph (wire single source: {@link WebBootEntry}
- * in `./client/manifest.ts`), serves `/plugins/<id>/client.js` and its source
- * map, taps the index render to inject the boot manifest, and provides the
- * `clientModuleHost` service (the HMR node half's registration/notification
- * face).
+ * GUI 模块注册 core：扫描 Host Loader 中声明 `dsh.client` 的包，组合启动图，
+ * 解析并校验 bundle 真实路径，并提供 HMR 注册/通知接口。HTTP route、HTML 注入和
+ * Desktop `app://` 映射由产品 adapter 独立实现。
  *
- * Scanning is incremental per package — there is no full-rescan code path.
- * Every cordis `internal/plugin` emission (fiber construction/disposal) marks
- * the fiber's entry name dirty; a microtask flush reconciles each dirty name
- * against the live loader entries. The activation pass seeds the same dirty
- * set with all current entries and flushes synchronously, so first scan and
- * steady state share one implementation. Package metadata (including the
- * negative "not a client package" verdict) is cached per name and never
- * expires — plugin-set changes take effect on restart; bundle content
- * changes reach the graph only through
- * {@link ClientModuleRegistry.rebuilt}.
+ * 稳态扫描按 package 增量执行：每次 Cordis `internal/plugin` 通知都会把对应条目标记为待处理，
+ * microtask 随后按实时 Loader 状态完成协调。首次对外读取快照时会再枚举一次 Loader，覆盖
+ * 模块注册器先激活、其他同级条目后激活但增量通知尚未到达的启动窗口；此后不再全量扫描。
+ * package 元数据（包括“不是客户端包”的否定结果）按名称缓存，插件集合变更在重启后生效；
+ * bundle 内容变化仅通过 {@link ClientModuleRegistry.rebuilt} 进入启动图。
  * @module @deepseek-ai/dsh-client-modules
  */
 
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
-import type { IncomingMessage, ServerResponse } from 'node:http'
+import { readFileSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
-import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { WebBootEntry, WebBootGraph } from './client/manifest.ts'
+import {
+  CLIENT_RESOURCE_MANIFEST_VERSION,
+  type ClientResourceManifest,
+} from './resource-manifest.ts'
 
 export type {
   BootManifest, BootModuleRow, BootPluginRow, WebBootEntry, WebBootGraph,
 } from './client/manifest.ts'
+export {
+  CLIENT_RESOURCE_MANIFEST_VERSION,
+  clientResourceManifestSchema,
+  parseClientResourceManifest,
+  type ClientResourceEntry,
+  type ClientResourceManifest,
+} from './resource-manifest.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -54,6 +53,7 @@ interface DshClientDeclaration {
 /** Resolved package metadata for one `dsh.client` package (cached per name, never expires). */
 interface PkgMeta {
   clientPath: string
+  packageRoot: string
   inject?: string[]
   immediately: boolean
 }
@@ -99,10 +99,11 @@ class ClientPackageCompositionError extends AggregateError {
   }
 }
 
-/** One composed table row: the wire entry plus its bundle path. */
+/** 一个已组合条目：启动图行、校验后的 bundle 真实路径与所属包根。 */
 interface WebPluginRecord {
   entry: WebBootEntry
   clientPath: string
+  packageRoot: string
 }
 
 /** Narrow an unknown parsed JSON value to the `dsh.client` declaration, throwing on malformed fields. */
@@ -158,31 +159,13 @@ function graphRow(id: string, rev: string, injectEdges: string[] | undefined, im
 }
 
 /**
- * Inject the boot entry graph into index.html: `window.__DSH_BOOT__` as the
- * first script in <head> (before the shell bundle reads it). `<` is escaped in
- * the JSON so plugin-controlled strings cannot break out of the script element.
- * @param html - the index.html source.
- * @param graph - the composed entry graph.
- * @returns the html with the graph script injected.
- */
-export function injectBootManifest(html: string, graph: WebBootGraph): string {
-  const json = JSON.stringify(graph).replaceAll('<', '\\u003c')
-  const script = `<script>window.__DSH_BOOT__ = ${json}</script>`
-  const head = html.indexOf('<head>')
-  if (head !== -1) return `${html.slice(0, head + 6)}${script}${html.slice(head + 6)}`
-  // Headless fixture pages may lack <head>; prepending keeps the read-before-shell ordering.
-  return `${script}${html}`
-}
-
-/**
- * The web plugin table service: incremental `dsh.client` scan + wire composition
- * + bundle route + index tap. Construction runs the activation scan
+ * GUI 模块表服务：增量扫描 `dsh.client` 并组合启动图。构造阶段同步执行首次扫描，
  * synchronously — a malformed declaration or missing bundle among the
  * already-loaded entries aggregates into one loud throw (FAILED fiber; the
  * boot activation audit reports it).
  */
 export class ClientModuleRegistry extends Service {
-  static inject = ['webServer', 'loader']
+  static inject = ['loader']
 
   private readonly table = new Map<string, WebPluginRecord>()
   // Negative verdicts (unresolvable specifier — builtins like cordis:include,
@@ -194,23 +177,35 @@ export class ClientModuleRegistry extends Service {
   private readonly dirty = new Set<string>()
   private readonly resolvePkgJson: (spec: string) => string
   private flushQueued = false
+  private firstSnapshotPending = true
   private composed: WebBootGraph
 
   /**
    * Build the service: subscribe, seed, and run the activation flush.
-   * @param ctx - plugin context carrying webServer and loader.
+   * @param ctx - 携带 Loader 和配置树解析基址的 Host 上下文。
    */
   constructor(ctx: Context) {
     super(ctx, 'clientModules')
-    // Resolution anchor: the config tree's baseUrl (the cordis.yml directory,
-    // whose package declares every composed plugin as a dependency). The
-    // modules package's own URL would miss sibling packages under pnpm's
-    // isolated node_modules.
     if (ctx.baseUrl === undefined) {
-      throw new Error('client-modules: ctx.baseUrl is unset — the node half needs the config-tree anchor to resolve plugin packages')
+      throw new Error('client-modules: module resolution base URL is unset')
     }
-    const require = createRequire(ctx.baseUrl)
-    this.resolvePkgJson = spec => require.resolve(`${spec}/package.json`)
+    const profileRequire = createRequire(ctx.baseUrl)
+    const hostModuleBaseUrl = ctx.get('hostModuleBaseUrl') as string | undefined
+    if (hostModuleBaseUrl === undefined) {
+      this.resolvePkgJson = spec => profileRequire.resolve(`${spec}/package.json`)
+    } else {
+      const hostRequire = createRequire(hostModuleBaseUrl)
+      this.resolvePkgJson = (spec) => {
+        try {
+          // 宿主直接依赖优先，避免 Profile 中的同名包遮蔽随应用发布的传输适配器。
+          return hostRequire.resolve(`${spec}/package.json`)
+        } catch (error) {
+          if (!isModuleNotFound(error)) throw error
+          // 组合包的传递客户端依赖由 Profile 平铺目录拥有，必须与 Loader 的回退顺序一致。
+          return profileRequire.resolve(`${spec}/package.json`)
+        }
+      }
+    }
 
     // Subscribe before seeding so a fiber arriving mid-activation lands in the
     // same dirty set (Set idempotence makes the overlap harmless). An entry-less
@@ -232,27 +227,16 @@ export class ClientModuleRegistry extends Service {
     // seed, and flush).
     for (const entry of ctx.loader.entries()) this.dirty.add(entry.options.name)
     this.composed = this.compose()
-    const failures: Error[] = []
-    this.flush(err => failures.push(err))
-    if (failures.length > 0) {
-      throw new ClientPackageCompositionError(failures)
-    }
+    this.flushPending()
 
-    ctx.effect(
-      () => ctx.webServer.register({ kind: 'prefix', path: '/plugins', handler: this.serveBundle }),
-      'client-modules: bundle route',
-    )
-    ctx.effect(
-      () => ctx.webServer.tapIndex(html => injectBootManifest(html, this.composed)),
-      'client-modules: boot manifest injection',
-    )
   }
 
   /**
-   * Current composed entry graph (stable object between changes).
-   * @returns the graph served as `window.__DSH_BOOT__`.
+   * 返回当前组合图；读取前同步结算已到达但尚未运行的增量扫描。
+   * @returns 提供给 GUI 外壳的启动图。
    */
   graph(): WebBootGraph {
+    this.settleSnapshot()
     return this.composed
   }
 
@@ -263,6 +247,25 @@ export class ClientModuleRegistry extends Service {
    */
   clientPath(id: string): string | undefined {
     return this.table.get(id)?.clientPath
+  }
+
+  /**
+   * 生成交给 Desktop Main 的只读资源映射；Renderer 只接收 {@link graph} 中的不透明 URL。
+   * @returns 当前图代际对应的可信 bundle 真实路径清单。
+   */
+  resourceManifest(): ClientResourceManifest {
+    this.settleSnapshot()
+    return Object.freeze({
+      version: CLIENT_RESOURCE_MANIFEST_VERSION,
+      rev: this.composed.rev,
+      resources: Object.freeze([...this.table.entries()].map(([id, record]) => Object.freeze({
+        id,
+        rev: record.entry.rev,
+        urlPath: `/plugins/${id}/client.js`,
+        sourcePath: record.clientPath,
+        sourceMapPath: `${record.clientPath}.map`,
+      }))),
+    })
   }
 
   /**
@@ -355,8 +358,15 @@ export class ClientModuleRegistry extends Service {
     if (clientRel === undefined) {
       throw new Error(`client-modules: ${pkgName} declares dsh.client but exports no "./client" bundle`)
     }
+    if (!clientRel.startsWith('./')) {
+      throw new Error(`client-modules: ${pkgName} exports["./client"] must be package-relative`)
+    }
+    const packageRoot = realpathSync(dirname(pkgPath))
+    const clientPath = resolve(packageRoot, clientRel)
+    assertOwnedPath(pkgName, packageRoot, clientPath)
     const meta: PkgMeta = {
-      clientPath: join(dirname(pkgPath), clientRel),
+      clientPath,
+      packageRoot,
       ...(decl.inject !== undefined ? { inject: decl.inject } : {}),
       immediately: decl.immediately === true,
     }
@@ -371,9 +381,15 @@ export class ClientModuleRegistry extends Service {
    * @returns the bundle content's short hash for use as its revision.
    * @throws {MissingClientBundleError} when the read fails with `ENOENT`; other filesystem errors are rethrown unchanged.
    */
-  private initialBundleRevision(pkgName: string, clientPath: string): string {
+  private initialBundle(
+    pkgName: string,
+    packageRoot: string,
+    clientPath: string,
+  ): { readonly path: string; readonly rev: string } {
     try {
-      return shortHash(readFileSync(clientPath))
+      const path = realpathSync(clientPath)
+      assertOwnedPath(pkgName, packageRoot, path)
+      return { path, rev: shortHash(readFileSync(path)) }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       throw new MissingClientBundleError(pkgName, clientPath, error)
@@ -395,8 +411,12 @@ export class ClientModuleRegistry extends Service {
     if (meta === null) return false
     // The rev rides the row from here on: a fiber restart reuses the row (and
     // its rev) untouched; only rebuilt() re-reads the bundle.
-    const rev = this.initialBundleRevision(entryName, meta.clientPath)
-    this.table.set(entryName, { entry: graphRow(entryName, rev, meta.inject, meta.immediately), clientPath: meta.clientPath })
+    const bundle = this.initialBundle(entryName, meta.packageRoot, meta.clientPath)
+    this.table.set(entryName, {
+      entry: graphRow(entryName, bundle.rev, meta.inject, meta.immediately),
+      clientPath: bundle.path,
+      packageRoot: meta.packageRoot,
+    })
     return true
   }
 
@@ -418,43 +438,40 @@ export class ClientModuleRegistry extends Service {
     }
   }
 
-  private readonly serveBundle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405)
-      res.end()
-      return
-    }
-    /* v8 ignore next -- `?? '/'` arm: node:http always sets url on server requests. */
-    const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname)
-    // The id may contain a scope slash. Anything else under /plugins (including
-    // /plugins/events when the HMR row is absent) is an unknown resource.
-    const prefix = '/plugins/'
-    const mapSuffix = '/client.js.map'
-    const bundleSuffix = '/client.js'
-    const isSourceMap = pathname.startsWith(prefix) && pathname.endsWith(mapSuffix)
-    const suffix = isSourceMap ? mapSuffix : bundleSuffix
-    const clientPath = pathname.startsWith(prefix) && pathname.endsWith(suffix)
-      ? this.clientPath(pathname.slice(prefix.length, -suffix.length))
-      : undefined
-    const path = clientPath === undefined ? undefined : `${clientPath}${isSourceMap ? '.map' : ''}`
-    if (path === undefined) {
-      res.writeHead(404)
-      res.end()
-      return
-    }
-    try {
-      const body = await readFile(path)
-      res.writeHead(200, {
-        'content-type': isSourceMap ? 'application/json; charset=utf-8' : 'text/javascript; charset=utf-8',
-        'cache-control': 'no-cache',
-      })
-      res.end(body)
-    } catch {
-      // Registered but unreadable (bundle not built yet): loud 404 beats a silent SPA-fallback HTML page.
-      res.writeHead(404)
-      res.end()
-    }
+  /** 同步结算待处理条目；产品首次读取图时，组合错误仍属于启动失败。 */
+  private flushPending(): void {
+    if (this.dirty.size === 0) return
+    const failures: Error[] = []
+    this.flush(error => failures.push(error))
+    if (failures.length > 0) throw new ClientPackageCompositionError(failures)
   }
+
+  /** 首次对外读取前补扫已安定的 Loader，之后只处理增量标记。 */
+  private settleSnapshot(): void {
+    if (this.firstSnapshotPending) {
+      this.firstSnapshotPending = false
+      for (const entry of this.ctx.loader.entries()) this.dirty.add(entry.options.name)
+      // 同步纳入表中旧键，使首次读取也能删除已退出的条目。
+      for (const name of this.table.keys()) this.dirty.add(name)
+    }
+    this.flushPending()
+  }
+
+}
+
+function assertOwnedPath(packageName: string, packageRoot: string, candidate: string): void {
+  const child = relative(packageRoot, candidate)
+  if (child === '' || (!child.startsWith(`..${pathSeparator()}`) && child !== '..' && !isAbsolute(child))) return
+  throw new Error(`client-modules: ${packageName} client bundle resolves outside its package root`)
+}
+
+function pathSeparator(): string {
+  return process.platform === 'win32' ? '\\' : '/'
+}
+
+/** 判断 Node 裸包解析是否仅因当前基址找不到模块而失败。 */
+function isModuleNotFound(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && error.code === 'MODULE_NOT_FOUND'
 }
 
 export default ClientModuleRegistry

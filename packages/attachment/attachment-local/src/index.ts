@@ -4,12 +4,20 @@ import { join, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { AttachmentStore } from '@deepseek-ai/dsh-attachment'
-import type { ImageAttachmentLimits, ImageAttachmentRef, SaveImageAttachment, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
+import type {
+  ImageAttachmentLimits,
+  ImageAttachmentPreview,
+  ImageAttachmentRef,
+  PreparedImageAttachmentBatch,
+  SaveImageAttachment,
+  StreamImageAttachment,
+  StoredImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
-import { readImageFile, saveImageFile, validateImageFile } from './store.ts'
+import { prepareImageFiles, readImageFile, readImagePreviewFile, saveImageFile, validateImageFile } from './store.ts'
 
 export { detectImage } from './image.ts'
-export { readImageFile, saveImageFile, validateImageFile } from './store.ts'
+export { prepareImageFiles, readImageFile, readImagePreviewFile, saveImageFile, validateImageFile } from './store.ts'
 
 /** Default maximum encoded bytes for one image. */
 export const DEFAULT_MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -68,8 +76,20 @@ export class LocalAttachmentStore extends AttachmentStore {
     return saveImageFile(this.root, input, this.imageLimits)
   }
 
+  override async prepareImages(inputs: readonly StreamImageAttachment[]): Promise<PreparedImageAttachmentBatch> {
+    return prepareImageFiles(this.root, inputs, this.imageLimits)
+  }
+
   async readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment> {
     return readImageFile(this.root, ref, signal)
+  }
+
+  override async readImagePreview(
+    ref: ImageAttachmentRef,
+    maxEdge: number,
+    signal?: AbortSignal,
+  ): Promise<ImageAttachmentPreview> {
+    return readImagePreviewFile(this.root, ref, maxEdge, signal)
   }
 }
 

@@ -14,6 +14,7 @@ import type { Context } from '@deepseek-ai/cordis'
 // method) instead of the standalone helper.
 import type { ISessions, SessionFace, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import type { ImageLoadPurpose } from '@deepseek-ai/dsh-client-ui-attachment'
 import type { ComposerAttachment } from './contract/slots.ts'
 import type { QueueAction, QueueItemId } from './contract/queue.ts'
 import type { ComposerBlocks } from './input/blocks.ts'
@@ -97,6 +98,7 @@ export class ConversationController extends Service implements IConversation {
   private readonly imageUrls = new Map<string, ImageUrlEntry>()
   private readonly imageGenerations = new Map<SessionId, number>()
   private readonly createdImageUrls = new Set<string>()
+  private thumbnailTail: Promise<void> = Promise.resolve()
   private disposed = false
 
   /**
@@ -133,11 +135,11 @@ export class ConversationController extends Service implements IConversation {
   }
 
   /**
-   * Submit ordered draft images with text through one host admission.
-   * @param session - target session.
-   * @param text - serialized prompt text.
-   * @param imageIds - ordered draft-local attachment ids.
-   * @param mode - queue or steer delivery selected by composer policy.
+   * 通过一次 Host 准入提交有序草稿图片与文本。
+   * @param session - 目标会话。
+   * @param text - 已序列化的 Prompt 文本。
+   * @param imageIds - 按用户顺序排列的草稿本地附件标识符。
+   * @param mode - 输入区策略选定的排队或转向投递。
    */
   async sendSession(
     session: SessionFace,
@@ -149,9 +151,20 @@ export class ConversationController extends Service implements IConversation {
     if (attachments.length !== imageIds.length) {
       throw new Error('conversation.sendSession: one or more draft images are no longer available')
     }
-    const uploaded = await this.serializeImages(attachments.map(attachment => attachment.file))
-    const content = [...uploaded, ...(text === '' ? [] : [{ type: 'text' as const, text }])]
-    const result = await session.prompt(content, mode)
+    const content = [
+      ...attachments.map(({ file }) => ({
+        type: 'image' as const,
+        source: {
+          mediaType: imageMediaType(file.type),
+          bytes: file.size,
+          ...(file.name === '' ? {} : { name: file.name }),
+          // 每次重试重新打开 File 流，避免复用已锁定或已消费的 reader。
+          stream: () => file.stream(),
+        },
+      })),
+      ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+    ]
+    const result = await session.promptUpload(content, mode)
     if (!result.ok) throw new Error(`conversation.send failed: ${result.error.code}: ${result.error.message}`)
     this.releaseDraftImages(attachments)
   }
@@ -206,14 +219,19 @@ export class ConversationController extends Service implements IConversation {
   }
 
   /**
-   * Resolve and cache one session-authorized historical image URL.
-   * @param sessionId - owning session authorization scope.
-   * @param attachment - durable image reference.
-   * @returns browser URL valid until its rendered session is released.
+   * 读取并缓存一张会话授权的历史图片。
+   * @param sessionId - 图片所属的会话授权范围。
+   * @param attachment - 日志中的持久图片引用。
+   * @param purpose - 列表缩略图或用户主动打开的原图。
+   * @returns 当前渲染会话释放前有效的浏览器 URL。
    */
-  resolveImage(sessionId: SessionId, attachment: ImageAttachmentRef): Promise<string> {
+  resolveImage(
+    sessionId: SessionId,
+    attachment: ImageAttachmentRef,
+    purpose: ImageLoadPurpose = 'original',
+  ): Promise<string> {
     if (this.disposed) return Promise.reject(new Error('conversation.resolveImage: service is disposed'))
-    const key = `${sessionId}:${attachment.attachmentId}`
+    const key = `${sessionId}:${attachment.attachmentId}:${purpose}`
     const cached = this.imageUrls.get(key)
     if (cached !== undefined) return cached.pending
     const generation = this.imageGenerations.get(sessionId) ?? 0
@@ -221,26 +239,43 @@ export class ConversationController extends Service implements IConversation {
     if (session === undefined) {
       return Promise.reject(new Error(`conversation.resolveImage: unknown session "${sessionId}"`))
     }
-    const pending = session.readAttachment(attachment.attachmentId)
-      .then((result) => {
-        if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
-        if (this.disposed) throw new Error('conversation.resolveImage: service was disposed before loading completed')
-        if ((this.imageGenerations.get(sessionId) ?? 0) !== generation) {
-          throw new Error('historical image scope was released before loading completed')
-        }
-        if (typeof URL.createObjectURL !== 'function') {
-          return `data:${result.value.attachment.mediaType};base64,${bytesToBase64(result.value.data)}`
-        }
-        const bytes = Uint8Array.from(result.value.data)
-        const url = URL.createObjectURL(new Blob([bytes.buffer], { type: result.value.attachment.mediaType }))
-        this.createdImageUrls.add(url)
-        return url
-      })
+    const load = async (): Promise<string> => {
+      if ((this.imageGenerations.get(sessionId) ?? 0) !== generation) {
+        throw new Error('historical image scope was released before loading started')
+      }
+      const result = await session.readAttachment(attachment, purpose)
+      if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+      if (this.disposed) throw new Error('conversation.resolveImage: service was disposed before loading completed')
+      if ((this.imageGenerations.get(sessionId) ?? 0) !== generation) {
+        throw new Error('historical image scope was released before loading completed')
+      }
+      const data = result.value.data
+      if (typeof URL.createObjectURL !== 'function') {
+        const bytes = new Uint8Array(await data.arrayBuffer())
+        return `data:${data.type};base64,${bytesToBase64(bytes)}`
+      }
+      const url = URL.createObjectURL(data)
+      this.createdImageUrls.add(url)
+      return url
+    }
+    // 缩略图读取和重编码严格串行，原图只由用户主动打开灯箱时按需读取。
+    const pending = (purpose === 'thumbnail' ? this.enqueueThumbnail(load) : load())
       .catch((error: unknown) => {
         if (this.imageUrls.get(key)?.generation === generation) this.imageUrls.delete(key)
         throw error
       })
     this.imageUrls.set(key, { sessionId, generation, pending })
+    return pending
+  }
+
+  /**
+   * 把缩略图读取串接到单一队列，限制 Utility 解码与 Renderer Blob 的并发峰值。
+   * @param task - 当前缩略图读取任务。
+   * @returns 保留任务原始结果或错误的 Promise。
+   */
+  private enqueueThumbnail<T>(task: () => Promise<T>): Promise<T> {
+    const pending = this.thumbnailTail.then(task)
+    this.thumbnailTail = pending.then(() => undefined, () => undefined)
     return pending
   }
 
@@ -312,15 +347,6 @@ export class ConversationController extends Service implements IConversation {
     return sessions
   }
 
-  /** Convert browser files to canonical base64 prompt parts. */
-  private serializeImages(images: readonly File[]): Promise<Parameters<SessionFace['prompt']>[0]> {
-    return Promise.all(images.map(async file => ({
-      type: 'image' as const,
-      mediaType: imageMediaType(file.type),
-      data: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
-      ...(file.name === '' ? {} : { name: file.name }),
-    })))
-  }
 }
 
 function imageMediaType(value: string): ImageMediaType {

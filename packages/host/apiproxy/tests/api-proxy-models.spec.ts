@@ -7,6 +7,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import { AttachmentId, AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import AgentRegistry, { agentEvents } from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import LlmRuntime, { LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -129,17 +130,39 @@ function registerTextOnly(ctx: Context): void {
 }
 
 describe('Web session model selection', () => {
-  it('validates an ordered image batch before persisting any member', async () => {
+  it('在流式正文完成校验后才提交已暂存图片', async () => {
     const { ctx, agent, sessionId } = await harness()
-    const validateImage = vi.fn((_input: { data: Uint8Array }) => Promise.resolve())
-    const saveImage = vi.fn((input: { data: Uint8Array; mediaType: 'image/png'; name?: string }) => Promise.resolve({
-      attachmentId: `att-${String(input.data[0])}`,
-      mediaType: input.mediaType,
-      bytes: input.data.byteLength,
-      width: 1,
-      height: 1,
-      ...input.name === undefined ? {} : { name: input.name },
-    }))
+    const order: string[] = []
+    const preparedBytes: number[][] = []
+    const prepareImages = vi.fn(async (inputs: readonly {
+      chunks: AsyncIterable<Uint8Array>
+      bytes: number
+      mediaType: 'image/png'
+      name?: string
+    }[]) => {
+      order.push('prepare')
+      for (const input of inputs) {
+        const bytes: number[] = []
+        for await (const chunk of input.chunks) bytes.push(...chunk)
+        preparedBytes.push(bytes)
+      }
+      return {
+        commit: async () => {
+          order.push('commit')
+          return inputs.map((input, index) => ({
+            attachmentId: `stream-${String(index)}` as never,
+            mediaType: input.mediaType,
+            bytes: input.bytes,
+            width: 1,
+            height: 1,
+            ...input.name === undefined ? {} : { name: input.name },
+          }))
+        },
+        dispose: async () => {
+          order.push('dispose')
+        },
+      }
+    })
     ctx.provide('attachments', {
       imageLimits: {
         maxImageBytes: 4,
@@ -148,9 +171,75 @@ describe('Web session model selection', () => {
         maxImagePixels: 4,
         mediaTypes: ['image/png'],
       },
-      validateImage,
-      saveImage,
+      prepareImages,
     } as never)
+    const followup = vi.fn((_message: UserMessage) => order.push('followup'))
+    Object.assign(agent, { followup })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-chat' }),
+      cwd: '/tmp',
+    })
+    const completeBody = vi.fn(async () => {
+      order.push('body-complete')
+    })
+
+    const result = await api.sessions.promptUpload(request({
+      sessionId,
+      mode: 'queue' as const,
+      content: [{
+        type: 'image' as const,
+        source: {
+          chunks: {
+            async *[Symbol.asyncIterator]() {
+              yield Uint8Array.of(1)
+              yield Uint8Array.of(2)
+            },
+          },
+          bytes: 2,
+          mediaType: 'image/png' as const,
+          name: 'stream.png',
+        },
+      }],
+      completeBody,
+    }) as never)
+
+    expect(result.result.ok).toBe(true)
+    expect(preparedBytes).toEqual([[1, 2]])
+    expect(order).toEqual(['prepare', 'body-complete', 'commit', 'dispose', 'followup'])
+    expect(completeBody).toHaveBeenCalledTimes(1)
+    expect((followup.mock.calls[0]?.[0] as UserMessage).content).toEqual([{
+      type: 'image',
+      attachment: {
+        attachmentId: 'stream-0', mediaType: 'image/png', bytes: 2, width: 1, height: 1, name: 'stream.png',
+      },
+    }])
+    await ctx.fiber.dispose()
+  })
+
+  it('validates an ordered image batch before persisting any member', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    const validateImage = vi.fn((_input: { data: Uint8Array }) => Promise.resolve())
+    const saveImage = vi.fn((input: { data: Uint8Array; mediaType: 'image/png'; name?: string }) => Promise.resolve({
+      attachmentId: AttachmentId(`att-${String(input.data[0])}`),
+      mediaType: input.mediaType,
+      bytes: input.data.byteLength,
+      width: 1,
+      height: 1,
+      ...input.name === undefined ? {} : { name: input.name },
+    }))
+    const imageLimits = {
+      maxImageBytes: 4,
+      maxImagesPerMessage: 2,
+      maxMessageImageBytes: 4,
+      maxImagePixels: 4,
+      mediaTypes: ['image/png'] as const,
+    }
+    await ctx.plugin(class extends AttachmentStore {
+      readonly imageLimits = imageLimits
+      readonly validateImage = validateImage
+      readonly saveImage = saveImage
+      readImage(): Promise<never> { return Promise.reject(new Error('unused')) }
+    })
     const followup = vi.fn()
     Object.assign(agent, { followup })
     const api = createApiProxy(ctx, {
@@ -266,6 +355,37 @@ describe('Web session model selection', () => {
       error: { code: 'attachment-error', details: { reason: 'ATTACHMENT_NOT_REFERENCED' } },
     })
     expect(readImage).toHaveBeenCalledOnce()
+    await ctx.fiber.dispose()
+  })
+
+  it('授权后通过附件 Provider 派生缩略图，不读取完整原图正文', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    const ref = {
+      attachmentId: 'att-preview', mediaType: 'image/png' as const, bytes: 5, width: 10, height: 5,
+    }
+    const readImage = vi.fn()
+    const readImagePreview = vi.fn(() => Promise.resolve({ mediaType: 'image/webp', data: Uint8Array.of(7) }))
+    ctx.provide('attachments', { readImage, readImagePreview } as never)
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-chat' }),
+      cwd: '/tmp',
+    })
+    agent.session.append('user/message', {
+      id: 'preview-message', role: 'user', source: { kind: 'user' },
+      content: [{ type: 'image', attachment: ref }],
+    } as never, { surfaceOp: 'append' })
+
+    const response = await api.sessions.attachmentBytes(request({
+      sessionId,
+      attachmentId: ref.attachmentId as never,
+      purpose: 'thumbnail',
+    }))
+    expect(response.result).toMatchObject({
+      ok: true,
+      value: { attachment: ref, mediaType: 'image/webp', data: Uint8Array.of(7) },
+    })
+    expect(readImagePreview).toHaveBeenCalledWith(ref, 480)
+    expect(readImage).not.toHaveBeenCalled()
     await ctx.fiber.dispose()
   })
   it('groups successful providers and leaves an unlisted current selection out of the catalog', async () => {

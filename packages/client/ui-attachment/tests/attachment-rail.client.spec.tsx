@@ -56,13 +56,55 @@ function stubGeometry(rail: HTMLElement, { scrollWidth, clientWidth }: { scrollW
 }
 
 describe('AttachmentRail', () => {
+  it('只为进入横向可见区的草稿图片设置预览 URL', () => {
+    const intersections: Array<{
+      callback: IntersectionObserverCallback
+      element?: Element
+      root?: Element | Document | null
+    }> = []
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        intersections.push({
+          callback,
+          ...(options?.root === undefined ? {} : { root: options.root }),
+        })
+      }
+
+      observe(element: Element): void { intersections.at(-1)!.element = element }
+      disconnect(): void {}
+      unobserve(): void {}
+      takeRecords(): IntersectionObserverEntry[] { return [] }
+      readonly root = null
+      readonly rootMargin = '0px 128px'
+      readonly thresholds = [0]
+    })
+    const view = render(
+      <AttachmentRail items={[item('a'), item('b')]} labels={labels} onOpen={vi.fn()} onRemove={vi.fn()} />,
+    )
+    const rail = view.getByRole('group', { name: '待发送图片' })
+    const images = [...rail.querySelectorAll('img')]
+    expect(images.map(image => image.getAttribute('src'))).toEqual([null, null])
+    expect(intersections).toHaveLength(2)
+    expect(intersections.every(observer => observer.root === rail)).toBe(true)
+
+    const first = intersections[0]
+    if (first?.element === undefined) throw new Error('first thumbnail observer missing')
+    act(() => {
+      first.callback([{ target: first.element, isIntersecting: true } as IntersectionObserverEntry], {} as never)
+    })
+    expect(images.map(image => image.getAttribute('src'))).toEqual(['blob:a', null])
+  })
+
   it('renders thumbnails in order and routes open and remove clicks', () => {
     const onOpen = vi.fn()
     const onRemove = vi.fn()
     const items = [item('a'), item('b')]
     const view = render(<AttachmentRail items={items} labels={labels} onOpen={onOpen} onRemove={onRemove} />)
     const rail = view.getByRole('group', { name: '待发送图片' })
-    expect([...rail.querySelectorAll('img')].map(img => img.getAttribute('alt'))).toEqual(['a.png', 'b.png'])
+    const thumbnails = [...rail.querySelectorAll('img')]
+    expect(thumbnails.map(img => img.getAttribute('alt'))).toEqual(['a.png', 'b.png'])
+    expect(thumbnails.every(img => img.getAttribute('loading') === 'lazy'
+      && img.getAttribute('decoding') === 'async')).toBe(true)
     fireEvent.click(view.getAllByTitle('查看原图')[0]!)
     expect(onOpen).toHaveBeenCalledWith(items[0])
     fireEvent.click(view.getByRole('button', { name: '移除图片 b.png' }))

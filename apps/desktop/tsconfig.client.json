@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.client.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types-client"
+  },
+  "include": [
+    "src/renderer",
+    "src/shared"
+  ],
+  "references": [
+    { "path": "../../vendor/cordis" },
+    { "path": "../../packages/client/connection/tsconfig.client.json" },
+    { "path": "../../packages/client/modules" },
+    { "path": "../../packages/client/web" },
+    { "path": "../../packages/session-query/session-log-export" }
+  ]
+}

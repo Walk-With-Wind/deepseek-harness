@@ -55,9 +55,15 @@ function scriptedApi(overrides: {
       rename: r => ok(r, { title: 'renamed', seq: 0 }),
       fork: r => ok(r, { sessionId: sid('s-fork') }),
       prompt: r => ok(r, { accepted: true as const }),
+      promptUpload: r => ok(r, { accepted: true as const }),
       attachment: r => ok(r, {
         attachment: { attachmentId: 'a' as never, mediaType: 'image/png', bytes: 1, width: 1, height: 1 },
         data: 'AA==',
+      }),
+      attachmentBytes: r => ok(r, {
+        attachment: { attachmentId: 'a' as never, mediaType: 'image/png', bytes: 1, width: 1, height: 1 },
+        mediaType: 'image/png',
+        data: Uint8Array.of(0),
       }),
       updateQueue: r => ok(r, { accepted: true as const }),
       cancel: r => ok(r, { accepted: true as const }),
@@ -712,6 +718,188 @@ describe('envelope tap', () => {
     await tapped.sessions.list({})
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(batches).toEqual([])
+  })
+})
+
+describe('binary prompt upload', () => {
+  it('streams image bytes outside JSON and reconstructs their ordered Host parts', async () => {
+    const raw = Uint8Array.from({ length: 2 * 1024 * 1024 + 7 }, (_, index) => index % 251)
+    let seen: unknown
+    let pulls = 0
+    const api = scriptedApi({
+      sessions: {
+        promptUpload: async (request) => {
+          const payload = request.payload as unknown as {
+            content: readonly ({ type: 'text'; text: string } | {
+              type: 'image'
+              source: { chunks: AsyncIterable<Uint8Array>; bytes: number; mediaType: string; name?: string }
+            })[]
+            completeBody(): Promise<void>
+          }
+          const content = []
+          for (const part of payload.content) {
+            if (part.type === 'text') {
+              content.push(part)
+              continue
+            }
+            const chunks = []
+            for await (const chunk of part.source.chunks) chunks.push(chunk)
+            content.push({
+              type: 'image',
+              mediaType: part.source.mediaType,
+              name: part.source.name,
+              data: new Uint8Array(Buffer.concat(chunks)),
+            })
+          }
+          await payload.completeBody()
+          seen = { ...request.payload, content }
+          return ok(request, { accepted: true as const })
+        },
+      },
+    })
+    const response = await client(api).sessions.promptUpload({
+      sessionId: sid('s-binary'),
+      mode: 'queue',
+      content: [
+        {
+          type: 'image',
+          source: {
+            mediaType: 'image/png',
+            bytes: raw.byteLength,
+            name: 'raw.png',
+            stream: () => new ReadableStream<Uint8Array>({
+              pull(controller) {
+                pulls += 1
+                controller.enqueue(raw)
+                controller.close()
+              },
+            }, { highWaterMark: 0 }),
+          },
+        },
+        { type: 'text', text: '说明' },
+      ],
+    })
+    expect(response.result).toEqual({ ok: true, value: { accepted: true } })
+    expect(pulls).toBe(1)
+    expect(seen).toMatchObject({
+      sessionId: 's-binary',
+      mode: 'queue',
+      content: [
+        { type: 'image', mediaType: 'image/png', name: 'raw.png' },
+        { type: 'text', text: '说明' },
+      ],
+    })
+    const image = (seen as { content: { type: string; data?: Uint8Array }[] }).content[0]
+    expect(image?.data).toEqual(raw)
+  })
+
+  it('rejects truncated or trailing image bytes while the session method consumes the stream', async () => {
+    const promptUpload = vi.fn(async (request: RpcRequest<unknown>) => {
+      const payload = request.payload as {
+        content: readonly ({ type: 'text' } | { type: 'image'; source: { chunks: AsyncIterable<Uint8Array> } })[]
+        completeBody(): Promise<void>
+      }
+      for (const part of payload.content) {
+        if (part.type === 'image') for await (const _chunk of part.source.chunks) { /* 消费完整图片。 */ }
+      }
+      await payload.completeBody()
+      return ok(request, { accepted: true as const })
+    })
+    const handler = toFetchHandler(scriptedApi({ sessions: { promptUpload } }))
+    const header = new TextEncoder().encode(JSON.stringify({
+      version: 1,
+      rpcId: 'binary-invalid',
+      payload: {
+        sessionId: 's1',
+        mode: 'queue',
+        content: [{ type: 'image', mediaType: 'image/png', bytes: 2 }],
+      },
+    }))
+    const prefix = new Uint8Array(4)
+    new DataView(prefix.buffer).setUint32(0, header.byteLength)
+    const request = (bytes: Uint8Array): Promise<Response> => handler.fetch(
+      'http://dsh.internal/api/session.prompt-upload',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/vnd.deepseek-harness.prompt-upload' },
+        body: new Blob([prefix.buffer, header.buffer, Uint8Array.from(bytes).buffer]),
+      },
+    )
+    expect((await request(Uint8Array.of(1))).status).toBe(400)
+    expect((await request(Uint8Array.of(1, 2, 3))).status).toBe(400)
+    expect(promptUpload).toHaveBeenCalledTimes(2)
+  })
+
+  it('streams an authorized attachment into a Blob without JSON/base64', async () => {
+    const raw = Uint8Array.from({ length: 2 * 1024 * 1024 + 7 }, (_, index) => index % 251)
+    const attachment = {
+      attachmentId: 'binary-attachment' as never,
+      mediaType: 'image/png' as const,
+      bytes: raw.byteLength,
+      width: 1,
+      height: 1,
+      name: 'raw.png',
+    }
+    let seen: unknown
+    const api = scriptedApi({
+      sessions: {
+        attachmentBytes: (request) => {
+          seen = request.payload
+          return ok(request, { attachment, mediaType: attachment.mediaType, data: raw })
+        },
+      },
+    })
+    const response = await client(api).sessions.attachmentBlob({
+      sessionId: sid('s-binary'),
+      attachment,
+    })
+    expect(seen).toEqual({
+      sessionId: 's-binary',
+      attachmentId: 'binary-attachment',
+      purpose: 'original',
+    })
+    expect(response.result.ok).toBe(true)
+    if (!response.result.ok) return
+    expect(response.result.value.attachment).toEqual(attachment)
+    expect(response.result.value.data).toBeInstanceOf(Blob)
+    expect(response.result.value.data.type).toBe('image/png')
+    expect(new Uint8Array(await response.result.value.data.arrayBuffer())).toEqual(raw)
+  })
+
+  it('为缩略图请求返回派生媒体类型和小字节体，同时保留原附件引用', async () => {
+    const preview = Uint8Array.of(4, 5, 6)
+    const attachment = {
+      attachmentId: 'preview-source' as never,
+      mediaType: 'image/png' as const,
+      bytes: 5 * 1024 * 1024,
+      width: 640,
+      height: 320,
+    }
+    let seen: unknown
+    const api = scriptedApi({
+      sessions: {
+        attachmentBytes: (request) => {
+          seen = request.payload
+          return ok(request, { attachment, mediaType: 'image/webp' as const, data: preview })
+        },
+      },
+    })
+
+    const response = await client(api).sessions.attachmentBlob({
+      sessionId: sid('s-preview'),
+      attachment,
+      purpose: 'thumbnail',
+    })
+    expect(seen).toEqual({
+      sessionId: 's-preview',
+      attachmentId: 'preview-source',
+      purpose: 'thumbnail',
+    })
+    expect(response.result.ok).toBe(true)
+    if (!response.result.ok) return
+    expect(response.result.value.attachment).toEqual(attachment)
+    expect(response.result.value.data.type).toBe('image/webp')
+    expect(new Uint8Array(await response.result.value.data.arrayBuffer())).toEqual(preview)
   })
 })
 

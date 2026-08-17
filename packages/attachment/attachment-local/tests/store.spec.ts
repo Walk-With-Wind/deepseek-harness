@@ -1,13 +1,13 @@
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
-import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, parse, resolve } from 'node:path'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import sharp from 'sharp'
-import type { ImageAttachmentLimits } from '@deepseek-ai/dsh-attachment'
-import { readImageFile, saveImageFile } from '../src/store.ts'
+import type { ImageAttachmentLimits, StreamImageAttachment } from '@deepseek-ai/dsh-attachment'
+import { prepareImageFiles, readImageFile, readImagePreviewFile, saveImageFile } from '../src/store.ts'
 
 const fsControl = vi.hoisted(() => ({
   readSignals: [] as AbortSignal[],
@@ -70,6 +70,56 @@ afterEach(async () => {
 })
 
 describe('local attachment store', () => {
+  it('把图片顺序暂存到磁盘，并在显式提交前保持对象目录为空', async () => {
+    const storageRoot = await root()
+    const events: string[] = []
+    const streamed = (label: string): StreamImageAttachment => ({
+      bytes: PNG.byteLength,
+      mediaType: 'image/png',
+      chunks: {
+        async *[Symbol.asyncIterator]() {
+          events.push(`${label}:start`)
+          yield PNG.subarray(0, 17)
+          yield PNG.subarray(17)
+          events.push(`${label}:end`)
+        },
+      },
+    })
+
+    const prepared = await prepareImageFiles(storageRoot, [streamed('first'), streamed('second')], LIMITS)
+
+    expect(events).toEqual(['first:start', 'first:end', 'second:start', 'second:end'])
+    await expect(readdir(join(storageRoot, 'objects'))).resolves.toEqual([])
+    await expect(readdir(join(storageRoot, 'tmp'))).resolves.toHaveLength(4)
+
+    const refs = await prepared.commit()
+    expect(refs).toHaveLength(2)
+    expect(refs[0]?.attachmentId).toBe(refs[1]?.attachmentId)
+    if (refs[0] === undefined) throw new Error('prepared image reference missing')
+    await expect(readImagePreviewFile(storageRoot, refs[0], 480))
+      .resolves.toMatchObject({ mediaType: 'image/webp' })
+    await prepared.dispose()
+    await expect(readdir(join(storageRoot, 'tmp'))).resolves.toEqual([])
+  })
+
+  it('批次中后续图片无效时不发布前序对象，并清除全部暂存文件', async () => {
+    const storageRoot = await root()
+    const input = (data: Uint8Array): StreamImageAttachment => ({
+      bytes: data.byteLength,
+      mediaType: 'image/png',
+      chunks: {
+        async *[Symbol.asyncIterator]() {
+          yield data
+        },
+      },
+    })
+
+    await expect(prepareImageFiles(storageRoot, [input(PNG), input(Uint8Array.of(1, 2, 3))], LIMITS))
+      .rejects.toMatchObject({ code: 'INVALID_IMAGE' })
+    await expect(readdir(join(storageRoot, 'objects'))).resolves.toEqual([])
+    await expect(readdir(join(storageRoot, 'tmp'))).resolves.toEqual([])
+  })
+
   it.skipIf(process.platform === 'win32')('syncs every object ancestor up to the durable boundary before returning', async () => {
     const storageRoot = await root()
     const base = join(storageRoot, '..', '..')
@@ -139,6 +189,25 @@ describe('local attachment store', () => {
     const ref = await saveImageFile(storageRoot, { data: PNG, mediaType: 'image/png' }, LIMITS)
 
     await expect(readImageFile(storageRoot, ref)).resolves.toEqual({ ref, data: PNG })
+  })
+
+  it('从内容寻址文件生成有界 WebP 缩略图，不把原始编码正文返回给调用方', async () => {
+    const storageRoot = await root()
+    const source = new Uint8Array(await sharp({
+      create: { width: 640, height: 320, channels: 4, background: { r: 17, g: 91, b: 203, alpha: 1 } },
+    }).png().toBuffer())
+    const ref = await saveImageFile(storageRoot, { data: source, mediaType: 'image/png' }, {
+      ...LIMITS,
+      maxImageBytes: source.byteLength,
+      maxImagePixels: 640 * 320,
+    })
+
+    const preview = await readImagePreviewFile(storageRoot, ref, 120)
+    const metadata = await sharp(preview.data).metadata()
+    expect(preview.mediaType).toBe('image/webp')
+    expect(metadata.width).toBe(120)
+    expect(metadata.height).toBe(60)
+    expect(preview.data).not.toEqual(source)
   })
 
   it('forwards read cancellation to the filesystem and preserves its reason', async () => {

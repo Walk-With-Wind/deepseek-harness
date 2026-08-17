@@ -1,10 +1,9 @@
-# Opt-in Web composition for inspecting the self-referential Cordis tools.
-# Temporary Plugin code can reach every injected live capability; treat this
-# deployment like shell access, not as a security boundary.
-# This file is a PATCH OVERLAY over the web profile (dsh-base + dsh-web-app
-# bundle layers), not a tree: `dsh web --patch` applies it as one more sibling
-# patch list at the same include level, so these patches reach every bundle
-# row. A patch replaces the targeted row's whole `config`.
+# 用于检查自引用 Cordis 工具的可选 Web 组合。
+# 临时插件代码可访问所有已注入的实时能力；应按 shell 访问对待本部署，不能视为安全边界。
+# 本文件是 Web profile（dsh-base + dsh-gui-app + dsh-web-app）之上的 patch
+# overlay，而不是配置树：`dsh web --patch` 会在同一 include 层级把它作为另一份
+# 同级 patch 列表应用，因此这些 patch 可以命中任意组合包行。patch 会替换目标行的
+# 整个 `config`。
 
 # Pinning the port here keeps this demo off the default 3080.
 - id: webserver

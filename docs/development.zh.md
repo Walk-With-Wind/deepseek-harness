@@ -87,6 +87,14 @@ pnpm run build
 
 `pnpm run hygiene` 包含 `publint`（用构建出的 `lib/*.js` 文件校验包入口点）和 `verify-node-next-types`（用一个临时的 NodeNext 消费方校验构建出的声明文件）。新 worktree 在 `pnpm run build` 运行之前没有打包的 JS 和声明文件；普通提交和推送无需构建，除非所选检查会使用这些产物。
 
+### Desktop 产物工作流
+
+`apps/desktop` 具有显式 Host 与 Client 编译面：Main、Preload、Utility、协议及其测试进入 Host aggregate，Renderer 与客户端测试进入 Client aggregate。`pnpm run build:desktop` 会先构建共享包的两个编译面，再由 Vite 发射 Renderer；该命令不创建安装器。
+
+使用 `pnpm run test:desktop` 验证 Desktop 与共享 carrier 行为。`pnpm run package:desktop` 针对当前原生平台与架构创建未签名 packaged application，随后运行 `pnpm run verify:desktop-artifact` 和 `pnpm run test:desktop:packaged`。`pnpm run make:desktop` 还会创建原生安装器族，并派生更新元数据、hash、SBOM、notices、许可证与 provenance；`pnpm run verify:desktop-materials` 会重新派生并比对这些文件。`pnpm run test:desktop:installer` 会改变系统安装状态，因此只允许在一次性原生 CI runner 上运行；它从最终 maker 产物安装、启动、加载原生模块并卸载。全部 staging 与产品都位于已忽略的 `.artifacts/desktop/` 下，只能作为 artifact-plane 输入，不能成为 source-plane 解析回退。
+
+已签名 macOS／Windows 产物与四个原生目标的发行证据只能由受保护 `Desktop` workflow 生成。该工作流在最终安装应用上执行离线／崩溃恢复／RSS／启动和关停验收，执行 1 GiB 导出，并以独立 job 运行 60 分钟 IPC 耐久；它不会发布远端 channel。[Desktop README](../apps/desktop/README.md)说明运行时／构建职责，[发行 cookbook](cookbook/releasing-desktop.md)定义受保护凭据与发布顺序。
+
 ### 环境变量
 
 真实的 DeepSeek 适配器和需要密钥的 agent 演示从环境变量或仓库根目录一个被 gitignore 的 `.env` 文件读取凭证：

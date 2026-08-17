@@ -20,7 +20,7 @@ function bindSessionExport(controller: SessionLogDownloadController) {
 }
 
 function bench() {
-  const controller = new SessionLogDownloadController(async () => new Response('zip'), vi.fn())
+  const controller = new SessionLogDownloadController({ save: () => Promise.resolve('saved') })
   const request = vi.fn((sessionId: SessionId) => controller.download(sessionId))
   const dismiss = vi.fn((sessionId: SessionId) => { controller.dismiss(sessionId) })
   const useSessionLogDownload = bindSessionExport(controller)
@@ -49,9 +49,9 @@ describe('Session export Header action', () => {
 
   it('disables the capsule while either entry path downloads this Session', async () => {
     const b = bench()
-    let release!: (response: Response) => void
-    const pending = new Promise<Response>((resolve) => { release = resolve })
-    const controller = new SessionLogDownloadController(() => pending, vi.fn())
+    let release!: (outcome: 'saved') => void
+    const pending = new Promise<'saved'>((resolve) => { release = resolve })
+    const controller = new SessionLogDownloadController({ save: () => pending })
     const useSessionLogDownload = bindSessionExport(controller)
     b.view.rerender(<SessionLogDownloadHeaderAction {...({
       sessionId: SID,
@@ -65,7 +65,7 @@ describe('Session export Header action', () => {
     const button = b.view.getByRole('button', { name: 'Session log' })
     await waitFor(() => { expect(button.getAttribute('aria-busy')).toBe('true') })
     expect((button as HTMLButtonElement).disabled).toBe(true)
-    release(new Response('zip'))
+    release('saved')
     await download
     await waitFor(() => { expect(button.getAttribute('aria-busy')).toBe('false') })
   })

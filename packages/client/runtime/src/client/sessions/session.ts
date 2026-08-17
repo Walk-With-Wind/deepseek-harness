@@ -1,10 +1,10 @@
 // Sessions remain resident after creation so they continue consuming mux frames off-screen.
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { ImageAttachmentRef, ImageReadPurpose } from '@deepseek-ai/dsh-attachment'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import type {
-  HistoryEntry, IApiClient, MessageId, MuxFrame, PromptContentPart, QueueAction, RpcError,
+  HistoryEntry, IApiClient, MessageId, MuxFrame, PromptContentPart, PromptUploadContentPart, QueueAction, RpcError,
   RpcId, RpcResponse, RpcResult, SessionId, SubagentAddress, ToolEventView,
 } from '@deepseek-ai/dsh-api-remotes/client'
 // Value import from the inline-safe wire layer (not the connection plugin):
@@ -27,6 +27,9 @@ import { ProjectionValueStore } from './projection-store.ts'
 import type { ProjectionsBaseline } from './projection-store.ts'
 import { resolvedClientTimeZone } from '../time-zone.ts'
 import { SessionQueueMirror } from './queue-mirror.ts'
+
+/** 普通 JSON 与二进制上传入口都能安全投递给 subagent 的公共内容字段。 */
+type PromptLikeContentPart = PromptContentPart | PromptUploadContentPart
 
 /** Messages requested per history page. */
 export const PAGE_MESSAGES = 50
@@ -188,6 +191,56 @@ export class Session implements SessionFace {
    * @returns the prompt result (also mirrored into promptError on failure).
    */
   async prompt(content: PromptContentPart[], mode: 'queue' | 'steer'): Promise<RpcResult<{ accepted: true }>> {
+    return this.runPrompt(() => this.dispatchPrompt(content, async () => (
+      await this.api.sessions.prompt({
+        sessionId: this.sessionId,
+        mode,
+        content,
+        clientTimeZone: resolvedClientTimeZone(),
+      })
+    ).result))
+  }
+
+  /** @inheritdoc */
+  async promptUpload(
+    content: readonly PromptUploadContentPart[],
+    mode: 'queue' | 'steer',
+  ): Promise<RpcResult<{ accepted: true }>> {
+    return this.runPrompt(() => this.dispatchPrompt(content, async () => (
+      await this.api.sessions.promptUpload({
+        sessionId: this.sessionId,
+        mode,
+        content,
+        clientTimeZone: resolvedClientTimeZone(),
+      })
+    ).result))
+  }
+
+  /**
+   * 按会话来源选择根会话载体或 subagent 续写入口。
+   * @param content - 普通 JSON 或二进制入口提交的有序内容。
+   * @param submitRoot - 只在根会话执行的具体载体提交。
+   * @returns 根会话或 subagent 的统一业务结果。
+   */
+  private dispatchPrompt(
+    content: readonly PromptLikeContentPart[],
+    submitRoot: () => Promise<RpcResult<{ accepted: true }>>,
+  ): Promise<RpcResult<{ accepted: true }>> {
+    if (this.address === undefined) return submitRoot()
+    return this.subagentPrompt(
+      content.flatMap(part => part.type === 'text' ? [part] : []),
+      content.some(part => part.type === 'image'),
+    )
+  }
+
+  /**
+   * 复用普通与二进制 Prompt 的同步状态边沿、错误投影和首次接受结算。
+   * @param submit - 在状态切换后执行的具体载体提交。
+   * @returns 统一映射后的 Prompt 业务结果。
+   */
+  private async runPrompt(
+    submit: () => Promise<RpcResult<{ accepted: true }>>,
+  ): Promise<RpcResult<{ accepted: true }>> {
     this.promptError = null
     this.lastAgentError = null
     // Synchronous, before the first await: the blank → engaging edge must be
@@ -198,43 +251,7 @@ export class Session implements SessionFace {
     this.notifier.markDirty()
     let result: RpcResult<{ accepted: true }>
     try {
-      if (this.address === undefined) {
-        result = (await this.api.sessions.prompt({
-          sessionId: this.sessionId,
-          mode,
-          content,
-          clientTimeZone: resolvedClientTimeZone(),
-        })).result
-      } else if (this.address.mode === 'one-shot') {
-        result = {
-          ok: false,
-          error: {
-            code: 'subagent-not-resumable',
-            message: 'one-shot subagent conversations are read-only',
-            details: { childSessionId: this.address.childSessionId },
-          },
-        }
-      } else {
-        if (content.some(part => part.type === 'image')) {
-          result = {
-            ok: false,
-            error: {
-              code: 'attachment-error',
-              message: 'Image input is unavailable for subagent continuations.',
-              details: { reason: 'SUBAGENT_IMAGE_UNSUPPORTED' },
-            },
-          }
-        } else {
-          const routed = (await this.api.subagents.prompt({
-            ...this.address,
-            content: content.flatMap(part => part.type === 'text'
-              ? [{ type: 'text' as const, text: part.text }]
-              : []),
-            clientTimeZone: resolvedClientTimeZone(),
-          })).result
-          result = routed.ok ? { ok: true, value: { accepted: true } } : routed
-        }
-      }
+      result = await submit()
     } catch (error) {
       result = transportError(error)
     }
@@ -260,22 +277,61 @@ export class Session implements SessionFace {
   }
 
   /**
-   * Resolve one image referenced by this session into browser-consumable bytes.
-   * @param attachmentId - opaque id found in the folded session log.
-   * @returns the authenticated reference and decoded bytes.
+   * 普通与二进制入口共享相同的 subagent 只读和图片拒绝语义。
+   * @param content - 允许转发给 subagent 的纯文本块。
+   * @param hasImage - 原始提交是否包含图片。
+   * @returns subagent 接受结果或稳定拒绝。
+   */
+  private async subagentPrompt(
+    content: { type: 'text'; text: string }[],
+    hasImage: boolean,
+  ): Promise<RpcResult<{ accepted: true }>> {
+    const address = this.address
+    if (address === undefined) throw new Error('subagentPrompt requires a subagent address')
+    if (address.mode === 'one-shot') {
+      return {
+        ok: false,
+        error: {
+          code: 'subagent-not-resumable',
+          message: 'one-shot subagent conversations are read-only',
+          details: { childSessionId: address.childSessionId },
+        },
+      }
+    }
+    if (hasImage) {
+      return {
+        ok: false,
+        error: {
+          code: 'attachment-error',
+          message: 'Image input is unavailable for subagent continuations.',
+          details: { reason: 'SUBAGENT_IMAGE_UNSUPPORTED' },
+        },
+      }
+    }
+    const routed = (await this.api.subagents.prompt({
+      ...address,
+      content,
+      clientTimeZone: resolvedClientTimeZone(),
+    })).result
+    return routed.ok ? { ok: true, value: { accepted: true } } : routed
+  }
+
+  /**
+   * 通过原始字节响应读取一张会话授权图片。
+   * @param attachment - Host 日志投影返回的附件引用。
+   * @param purpose - 读取历史缩略图或用户主动打开的原图。
+   * @returns 可直接创建 Object URL 的浏览器 Blob。
    */
   async readAttachment(
-    attachmentId: AttachmentIdType,
-  ): Promise<RpcResult<{ attachment: ImageAttachmentRef; data: Uint8Array }>> {
+    attachment: ImageAttachmentRef,
+    purpose: ImageReadPurpose = 'original',
+  ): Promise<RpcResult<{ attachment: ImageAttachmentRef; data: Blob }>> {
     try {
-      const result = (await this.api.sessions.attachment({
+      return (await this.api.sessions.attachmentBlob({
         sessionId: this.sessionId,
-        attachmentId,
+        attachment,
+        purpose,
       })).result
-      if (!result.ok) return result
-      const binary = atob(result.value.data)
-      const data = Uint8Array.from(binary, char => char.charCodeAt(0))
-      return { ok: true, value: { attachment: result.value.attachment, data } }
     } catch (error) {
       return transportError(error)
     }

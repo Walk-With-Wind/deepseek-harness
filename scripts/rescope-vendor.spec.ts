@@ -4,11 +4,14 @@
  * rejected rather than applied again.
  */
 
+import { spawnSync } from 'node:child_process'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { exactEditState } from './rescope-vendor.ts'
 
 const ANCHOR = '\n## Sync procedure'
 const INSERTED = `\n15. **rescope**: one log entry.\n${ANCHOR}`
+const ROOT = resolve(import.meta.dirname, '..')
 
 describe('exactEditState', () => {
   it('classifies an insertion by its target form, so a duplicate is invalid', () => {
@@ -37,5 +40,19 @@ describe('exactEditState', () => {
     // A moved or partially applied site: neither state is complete.
     expect(exactEditState('a = 1\nb = 2\n', 'a = 1', 'b = 2', 1)).toBe('invalid')
     expect(exactEditState('x\n', 'a = 1', 'b = 2', 1)).toBe('invalid')
+  })
+})
+
+describe('rescope vendor runtime identifiers', () => {
+  it('不会把 Cordis 事件、locale 和产品命名空间当作旧 npm 包引用', () => {
+    const result = spawnSync(process.execPath, [
+      '--import',
+      'tsx/esm',
+      resolve(ROOT, 'scripts/rescope-vendor.ts'),
+      '--check',
+    ], { cwd: ROOT, encoding: 'utf8' })
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain('post-state verified')
   })
 })

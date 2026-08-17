@@ -87,6 +87,14 @@ pnpm run build
 
 `pnpm run hygiene` includes `publint`, which validates package entrypoints against the built `lib/*.js` files, and `verify-node-next-types`, which validates built declarations against a temporary NodeNext consumer. A fresh worktree has no bundled JS or declarations until `pnpm run build` runs; ordinary commits and pushes do not require that build unless their selected checks consume it.
 
+### Desktop artifact workflow
+
+`apps/desktop` has explicit Host and Client compiler faces: Main, Preload, Utility, protocols, and their tests join the Host aggregate; Renderer and client tests join the Client aggregate. `pnpm run build:desktop` builds both shared package faces before Vite emits the Renderer. It does not create an installer.
+
+Use `pnpm run test:desktop` for Desktop and shared-carrier behavior. `pnpm run package:desktop` creates an unsigned packaged application for the current native platform and architecture; follow it with `pnpm run verify:desktop-artifact` and `pnpm run test:desktop:packaged`. `pnpm run make:desktop` additionally creates the native installer family and derives update metadata, hashes, SBOM, notices, license, and provenance; `pnpm run verify:desktop-materials` re-derives those files. `pnpm run test:desktop:installer` changes system installation state, so it runs only on a disposable native CI runner; it installs from final maker output, starts the product, loads native modules, and uninstalls it. All staging and products live under ignored `.artifacts/desktop/` and are artifact-plane inputs, never source-plane resolution fallbacks.
+
+Signed macOS/Windows and native four-target release evidence is produced only by the protected `Desktop` workflow. It checks offline startup, crash recovery, RSS, startup, and shutdown on the final installed app, exercises a 1 GiB export, and runs a separate 60-minute IPC endurance job; it does not publish a remote channel. The [Desktop README](../apps/desktop/README.md) describes runtime/build ownership, and the [release cookbook](cookbook/releasing-desktop.md) defines protected credentials and publication order.
+
 ### Environment variables
 
 The real DeepSeek adapter and key-backed agent demos read credentials from the environment or from a gitignored `.env` at the repo root:

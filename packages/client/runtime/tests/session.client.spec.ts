@@ -564,16 +564,25 @@ describe('prompt and cancel errors', () => {
 
   it('reads session-authorized attachment bytes and keeps the opaque id on the wire', async () => {
     const { api, session } = makeSession()
-    const result = await session.readAttachment('attachment-1' as never)
-    expect(result).toEqual({
-      ok: true,
-      value: {
-        attachment: { attachmentId: 'a', mediaType: 'image/png', bytes: 1, width: 1, height: 1 },
-        data: Uint8Array.of(0),
-      },
-    })
-    expect(api.callsOf('session.attachment')).toEqual([{
-      sessionId: SID, attachmentId: 'attachment-1',
+    const attachment = {
+      attachmentId: 'attachment-1' as never,
+      mediaType: 'image/png' as const,
+      bytes: 1,
+      width: 1,
+      height: 1,
+    }
+    api.onAttachmentBlob = () => Promise.resolve(ok({
+      attachment,
+      data: new Blob([Uint8Array.of(0)], { type: 'image/png' }),
+    }))
+    const result = await session.readAttachment(attachment)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.attachment).toEqual(attachment)
+    expect(result.value.data).toBeInstanceOf(Blob)
+    expect(new Uint8Array(await result.value.data.arrayBuffer())).toEqual(Uint8Array.of(0))
+    expect(api.callsOf('session.attachmentBlob')).toEqual([{
+      sessionId: SID, attachment, purpose: 'original',
     }])
   })
 })

@@ -5,10 +5,9 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-/** Default carrier cap for all HTTP RPC bodies: sized for the default
- * aggregate image limit (100 MiB) after base64 expansion plus envelope
- * headroom (~134.3 MiB required), rounded up for slack. The bridge buffers
- * each body in memory, so this cap is also the per-request resident bound. */
+/** 全部 HTTP RPC 正文的默认上限：可容纳默认 100 MiB 原始图片总量与有界上传
+ * Manifest，并为普通 RPC 留出余量。bridge 会把每个正文整体缓冲在内存中，
+ * 因此该值也是单请求驻留上限。 */
 export const DEFAULT_MAX_REQUEST_BODY_BYTES = 160 * 1024 * 1024
 
 /** Transport-independent request handler consumed by the Host HTTP bridge. */

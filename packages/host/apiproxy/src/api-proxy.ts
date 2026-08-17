@@ -10,8 +10,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
-import { AttachmentError } from '@deepseek-ai/dsh-attachment'
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import { AttachmentError, IMAGE_PREVIEW_MAX_EDGE } from '@deepseek-ai/dsh-attachment'
+import type {
+  AttachmentIdType, ImageAttachmentRef, ImageReadPurpose, StreamImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
 import { contentHasImage, createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
@@ -36,9 +38,11 @@ import {
 import type { PresetBearingSession } from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {
-  ApiProxy, ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
+  ApiProxy, AttachmentByteValue, ConfigurableProviderView, CredentialView, GoalRef, HistoryEntry, HostFrame,
   ModelCatalogFailure, ModelProviderGroup,
-  ModelReasoning, MuxFrame, PromptContentPart, QuestionResponsePayload, SessionListMetadata, SessionProjectionsBlock, SessionSearchItem,
+  ModelReasoning, MuxFrame, PromptByteContentPart, PromptBytePayload,
+  PromptStreamContentPart,
+  QuestionResponsePayload, SessionListMetadata, SessionProjectionsBlock, SessionSearchItem,
   QueuedInboxItem, SessionSummary, SettingsNamespaceView, SubagentAddress, JobView, ToolEventView,
   WorkspaceId, WorkspaceView,
 } from './api/index.ts'
@@ -147,44 +151,74 @@ function decodeBase64(data: string): Uint8Array {
   return new Uint8Array(decoded)
 }
 
-/** Validate one prompt as a batch before publishing any durable image object. */
-async function durablePromptContent(ctx: Context, content: readonly PromptContentPart[]): Promise<ContentBlock[]> {
-  if (content.every(part => part.type === 'text')) {
-    return content.map(part => ({ type: 'text', text: part.text }))
+type PromptAdmissionContentPart = PromptByteContentPart | PromptStreamContentPart
+
+/** 把旧的一元图片字节适配为只消费一次的异步来源。 */
+function oneChunk(data: Uint8Array): AsyncIterable<Uint8Array> {
+  return {
+    [Symbol.asyncIterator]() {
+      let delivered = false
+      return {
+        next: () => {
+          if (delivered) return Promise.resolve({ done: true as const, value: undefined })
+          delivered = true
+          return Promise.resolve({ done: false as const, value: data })
+        },
+      }
+    },
   }
-  const limits = ctx.attachments.imageLimits
-  if (content.filter(part => part.type === 'image').length > limits.maxImagesPerMessage) {
-    throw new AttachmentError('Prompt exceeds the configured image-count limit.', 'TOO_MANY_IMAGES')
+}
+
+function imageSource(part: Extract<PromptAdmissionContentPart, { type: 'image' }>): StreamImageAttachment {
+  if ('source' in part) return part.source
+  return {
+    chunks: oneChunk(part.data),
+    bytes: part.data.byteLength,
+    mediaType: part.mediaType,
+    ...part.name === undefined ? {} : { name: part.name },
   }
-  const prepared = content.map(part => part.type === 'text'
-    ? part
-    : { part, data: decodeBase64(part.data) })
-  const images = prepared.filter((part): part is Extract<typeof part, { data: Uint8Array }> => 'data' in part)
-  const totalBytes = images.reduce((sum, image) => sum + image.data.byteLength, 0)
-  if (totalBytes > limits.maxMessageImageBytes) {
-    throw new AttachmentError('Prompt exceeds the configured aggregate image-byte limit.', 'IMAGES_TOO_LARGE')
-  }
-  for (const image of images) {
-    await ctx.attachments.validateImage({
-      data: image.data,
-      mediaType: image.part.mediaType,
-      ...image.part.name === undefined ? {} : { name: image.part.name },
+}
+
+/**
+ * 顺序准入一条 Prompt 的图片，并在正文尾部校验通过后才发布持久对象。
+ * @param ctx - 提供附件存储的 Host 上下文。
+ * @param content - 保持用户顺序的文本、内存图片或流式图片。
+ * @param completeBody - 可选的物理请求尾部校验，必须发生在 commit 之前。
+ * @returns 只包含文本和持久附件引用的模型内容。
+ */
+async function durablePromptContent(
+  ctx: Context,
+  content: readonly PromptAdmissionContentPart[],
+  completeBody?: () => Promise<void>,
+): Promise<ContentBlock[]> {
+  const images = content.filter(
+    (part): part is Extract<PromptAdmissionContentPart, { type: 'image' }> => part.type === 'image',
+  )
+  if (images.length === 0) {
+    await completeBody?.()
+    return content.map((part): ContentBlock => {
+      if (part.type === 'text') return { type: 'text', text: part.text }
+      throw new AttachmentError('Attachment batch lost an image source.', 'ATTACHMENT_WRITE_FAILED')
     })
   }
-  const blocks: ContentBlock[] = []
-  for (const item of prepared) {
-    if (!('data' in item)) {
-      blocks.push({ type: 'text', text: item.text })
-      continue
+  const prepared = await ctx.attachments.prepareImages(images.map(imageSource))
+  let refs: readonly ImageAttachmentRef[]
+  try {
+    await completeBody?.()
+    refs = await prepared.commit()
+  } finally {
+    await prepared.dispose()
+  }
+  let imageIndex = 0
+  return content.map((part): ContentBlock => {
+    if (part.type === 'text') return { type: 'text', text: part.text }
+    const attachment = refs[imageIndex]
+    imageIndex += 1
+    if (attachment === undefined) {
+      throw new AttachmentError('Attachment batch returned an incomplete reference list.', 'ATTACHMENT_WRITE_FAILED')
     }
-    const attachment = await ctx.attachments.saveImage({
-      data: item.data,
-      mediaType: item.part.mediaType,
-      ...item.part.name === undefined ? {} : { name: item.part.name },
-    })
-    blocks.push({ type: 'image', attachment })
-  }
-  return blocks
+    return { type: 'image', attachment }
+  })
 }
 
 /** Search durable content for an image reference, including nested tool results. */
@@ -653,6 +687,8 @@ export interface ApiProxyDefaults {
   cwd: string
   /** Native open-with-default-application; injectable for carrier tests. */
   openPath?: (path: string, signal: AbortSignal) => Promise<void>
+  /** 在接受客户端提交的路径后、调用原生打开器前完成产品级授权并返回规范路径。 */
+  authorizeOpenPath?: (path: string, signal: AbortSignal) => Promise<string>
   /** Native text-editor handoff; injectable for settings-document tests. */
   openTextFile?: (path: string, signal: AbortSignal) => Promise<void>
   /** Validated DEFLATE level for session-log ZIP entries; defaults to 6. */
@@ -1866,6 +1902,139 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     return { agent }
   }
 
+  /**
+   * 统一提交 JSON 与二进制两种 Prompt 入口；两者共享模型校验、图片串行准入和日志来源。
+   * @param request - 关联本次用户消息的请求。
+   * @param payload - 会话、投递模式与浏览器时区。
+   * @param hasImage - 无需读取正文即可判定的图片存在标记。
+   * @param prepareContent - 在图片准入锁内生成原始字节内容。
+   * @param completeBody - 提交附件前验证物理请求没有尾随字节。
+   * @returns Prompt 接受结果或稳定业务错误。
+   */
+  async function submitPrompt(
+    request: RpcRequest<unknown>,
+    payload: Pick<PromptBytePayload, 'sessionId' | 'mode' | 'clientTimeZone'>,
+    hasImage: boolean,
+    prepareContent: () => readonly PromptAdmissionContentPart[],
+    completeBody?: () => Promise<void>,
+  ): Promise<RpcResponse<{ accepted: true }>> {
+    const { sessionId, mode, clientTimeZone } = payload
+    const canonicalTimeZone = clientTimeZone === undefined
+      ? undefined
+      : canonicalClientTimeZone(clientTimeZone)
+    if (clientTimeZone !== undefined && canonicalTimeZone === undefined) {
+      return err(request, {
+        code: 'invalid-time-zone',
+        message: 'clientTimeZone must be UTC or a valid IANA Area/Location name',
+        details: { value: clientTimeZone },
+      })
+    }
+    const resolved = await turnAgentFor<{ accepted: true }>(request, sessionId)
+    if ('refused' in resolved) return resolved.refused
+    const agent = resolved.agent
+    const source: MessageSource = {
+      kind: 'user',
+      rpcId: request.rpcId,
+      ...(canonicalTimeZone === undefined ? {} : { clientTimeZone: canonicalTimeZone }),
+    }
+    const admit = async (): Promise<RpcResponse<{ accepted: true }>> => {
+      try {
+        const content = prepareContent()
+        if (hasImage) {
+          const current = selectionFor(agent).current
+          const modelInfo = await ctx.llm.resolveModelInfo(current.provider, current.model)
+          if (modelInfo.inputModalities !== undefined && !modelInfo.inputModalities.includes('image')) {
+            return err(request, {
+              code: 'attachment-error',
+              message: `Model "${current.model}" does not support image input.`,
+              details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
+            })
+          }
+        }
+        const durable = await durablePromptContent(ctx, content, completeBody)
+        const message: UserMessage = createUserMessage({ content: durable, source })
+        if (mode === 'steer') agent.steer(message)
+        else agent.followup(message)
+      } catch (error: unknown) {
+        if (error instanceof AttachmentError) {
+          return err(request, {
+            code: 'attachment-error',
+            message: error.message,
+            details: { reason: error.code },
+          })
+        }
+        return err(request, {
+          code: 'agent-busy',
+          message: 'prompt rejected',
+          details: { reason: String(error) },
+        })
+      }
+      return ok(request, { accepted: true as const })
+    }
+    return hasImage ? serializeImageAdmission(agent, admit) : admit()
+  }
+
+  /**
+   * 统一执行 JSON 与原始字节读取所需的会话引用授权和附件存储访问。
+   * @param request - 会话和不透明附件标识。
+   * @returns 原始附件字节或稳定业务错误。
+   */
+  async function readAuthorizedAttachment(
+    request: RpcRequest<{
+      sessionId: SessionId
+      attachmentId: AttachmentIdType
+      purpose?: ImageReadPurpose
+    }>,
+  ): Promise<RpcResponse<AttachmentByteValue>> {
+    const { sessionId, attachmentId, purpose = 'original' } = request.payload
+    let state: SessionReadState
+    try {
+      state = await readSessionState(sessionId)
+    } catch (error: unknown) {
+      if (error instanceof SessionNotFound) {
+        return err(request, {
+          code: 'session-not-found',
+          message: error.message,
+          details: { sessionId },
+        })
+      }
+      return err(request, {
+        code: 'internal',
+        message: `attachment authorization unavailable for session "${sessionId}": ${String(error)}`,
+        details: {},
+      })
+    }
+    const ref = referencedImage(state.events, String(attachmentId))
+    if (ref === undefined) {
+      return err(request, {
+        code: 'attachment-error',
+        message: 'Image is not referenced by this session.',
+        details: { reason: 'ATTACHMENT_NOT_REFERENCED' },
+      })
+    }
+    try {
+      if (purpose === 'thumbnail') {
+        const preview = await ctx.attachments.readImagePreview(ref, IMAGE_PREVIEW_MAX_EDGE)
+        return ok(request, { attachment: ref, mediaType: preview.mediaType, data: preview.data })
+      }
+      const stored = await ctx.attachments.readImage(ref)
+      return ok(request, { attachment: stored.ref, mediaType: stored.ref.mediaType, data: stored.data })
+    } catch (error: unknown) {
+      if (error instanceof AttachmentError) {
+        return err(request, {
+          code: 'attachment-error',
+          message: error.message,
+          details: { reason: error.code },
+        })
+      }
+      return err(request, {
+        code: 'internal',
+        message: 'Unable to read image attachment.',
+        details: {},
+      })
+    }
+  }
+
   /** Missing-service report shared by the settings domain (skills-domain stance). */
   function settingsAbsent(): RpcError {
     return { code: 'internal', message: 'settings service is absent: this deployment does not mount a settings provider (e.g. @deepseek-ai/dsh-settings-file) in its composition', details: {} }
@@ -1901,6 +2070,21 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   ): Promise<RpcResponse<{ opened: true }>> {
     const open = defaults.openPath
       ?? ((target: string, openSignal: AbortSignal) => openNativePath(target, openSignal))
+    return openTarget(request, path, signal, open)
+  }
+
+  /** 对客户端提交的原始路径执行产品策略授权后再进入统一原生打开流程。 */
+  function openRequestedPath(
+    request: RpcRequest<unknown>, path: string, signal: AbortSignal,
+  ): Promise<RpcResponse<{ opened: true }>> {
+    const open = async (target: string, openSignal: AbortSignal): Promise<void> => {
+      const authorized = defaults.authorizeOpenPath === undefined
+        ? target
+        : await defaults.authorizeOpenPath(target, openSignal)
+      const nativeOpen = defaults.openPath
+        ?? ((value: string, nativeSignal: AbortSignal) => openNativePath(value, nativeSignal))
+      await nativeOpen(authorized, openSignal)
+    }
     return openTarget(request, path, signal, open)
   }
 
@@ -2459,110 +2643,44 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
 
       async prompt(request) {
-        const { sessionId, mode, content, clientTimeZone } = request.payload
-        const canonicalTimeZone = clientTimeZone === undefined
-          ? undefined
-          : canonicalClientTimeZone(clientTimeZone)
-        if (clientTimeZone !== undefined && canonicalTimeZone === undefined) {
-          return err(request, {
-            code: 'invalid-time-zone',
-            message: 'clientTimeZone must be UTC or a valid IANA Area/Location name',
-            details: { value: clientTimeZone },
-          })
-        }
-        const resolved = await turnAgentFor<{ accepted: true }>(request, sessionId)
-        if ('refused' in resolved) return resolved.refused
-        const agent = resolved.agent
-        // Request identity and optional browser zone ride the exact durable user message.
-        const source: MessageSource = {
-          kind: 'user',
-          rpcId: request.rpcId,
-          ...(canonicalTimeZone === undefined ? {} : { clientTimeZone: canonicalTimeZone }),
-        }
+        const { content } = request.payload
         const hasImage = content.some(part => part.type === 'image')
-        const admit = async (): Promise<RpcResponse<{ accepted: true }>> => {
-          try {
-            if (hasImage) {
-              const current = selectionFor(agent).current
-              const modelInfo = await ctx.llm.resolveModelInfo(current.provider, current.model)
-              if (modelInfo.inputModalities !== undefined && !modelInfo.inputModalities.includes('image')) {
-                return err(request, {
-                  code: 'attachment-error',
-                  message: `Model "${current.model}" does not support image input.`,
-                  details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
-                })
-              }
+        return submitPrompt(request, request.payload, hasImage, () => content.map((part): PromptByteContentPart => (
+          part.type === 'text'
+            ? part
+            : {
+              type: 'image',
+              mediaType: part.mediaType,
+              data: decodeBase64(part.data),
+              ...part.name === undefined ? {} : { name: part.name },
             }
-            const durable = await durablePromptContent(ctx, content)
-            const message: UserMessage = createUserMessage({ content: durable, source })
-            if (mode === 'steer') agent.steer(message)
-            else agent.followup(message)
-          } catch (error: unknown) {
-            if (error instanceof AttachmentError) {
-              return err(request, {
-                code: 'attachment-error',
-                message: error.message,
-                details: { reason: error.code },
-              })
-            }
-            return err(request, {
-              code: 'agent-busy',
-              message: 'prompt rejected',
-              details: { reason: String(error) },
-            })
-          }
-          return ok(request, { accepted: true as const })
-        }
-        return hasImage ? serializeImageAdmission(agent, admit) : admit()
+        )))
+      },
+
+      async promptUpload(request) {
+        const hasImage = request.payload.content.some(part => part.type === 'image')
+        return submitPrompt(
+          request,
+          request.payload,
+          hasImage,
+          () => request.payload.content,
+          () => request.payload.completeBody(),
+        )
       },
 
       async attachment(request) {
-        const { sessionId, attachmentId } = request.payload
-        let state: SessionReadState
-        try {
-          state = await readSessionState(sessionId)
-        } catch (error: unknown) {
-          if (error instanceof SessionNotFound) {
-            return err(request, {
-              code: 'session-not-found',
-              message: error.message,
-              details: { sessionId },
-            })
-          }
-          return err(request, {
-            code: 'internal',
-            message: `attachment authorization unavailable for session "${sessionId}": ${String(error)}`,
-            details: {},
-          })
+        const response = await readAuthorizedAttachment(request)
+        if (!response.result.ok) {
+          return { rpcId: response.rpcId, result: { ok: false, error: response.result.error } }
         }
-        const ref = referencedImage(state.events, String(attachmentId))
-        if (ref === undefined) {
-          return err(request, {
-            code: 'attachment-error',
-            message: 'Image is not referenced by this session.',
-            details: { reason: 'ATTACHMENT_NOT_REFERENCED' },
-          })
-        }
-        try {
-          const stored = await ctx.attachments.readImage(ref)
-          return ok(request, {
-            attachment: stored.ref,
-            data: Buffer.from(stored.data).toString('base64'),
-          })
-        } catch (error: unknown) {
-          if (error instanceof AttachmentError) {
-            return err(request, {
-              code: 'attachment-error',
-              message: error.message,
-              details: { reason: error.code },
-            })
-          }
-          return err(request, {
-            code: 'internal',
-            message: 'Unable to read image attachment.',
-            details: {},
-          })
-        }
+        return ok(request, {
+          attachment: response.result.value.attachment,
+          data: Buffer.from(response.result.value.data).toString('base64'),
+        })
+      },
+
+      attachmentBytes(request) {
+        return readAuthorizedAttachment(request)
       },
 
       updateQueue(request) {
@@ -3006,7 +3124,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
 
       async openPath(request, signal) {
-        return openPath(request, request.payload.path, signal)
+        return openRequestedPath(request, request.payload.path, signal)
       },
     },
 

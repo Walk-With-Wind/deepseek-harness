@@ -1,12 +1,10 @@
 /**
  * Node 22 startup-output smoke for the shipped Web CLI composition.
  *
- * Only the dedicated Node compatibility gate opts this test in after building
- * both artifacts; ordinary Vitest inventory deterministically skips it.
- * The child runs built artifacts under plain Node with the real shipped
- * web profile (dsh-base + dsh-web-app bundle patches, auto-initialized).
- * Its URL line follows the settled profile boot; SIGTERM then exercises the
- * shipped quiescent disposer.
+ * 仅专用 Node 兼容性门禁会在产物构建后启用本测试；普通 Vitest 清单固定跳过。
+ * 子进程在普通 Node 下运行已构建产物，并使用自动初始化的正式 Web profile
+ * （dsh-base + dsh-gui-app + dsh-web-app）。URL 输出发生在 profile 完成启动后，
+ * 随后的 SIGTERM 用于验证正式的完全停稳释放流程。
  */
 
 import { spawn } from 'node:child_process'
@@ -21,10 +19,9 @@ import { describe, expect, it } from 'vitest'
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
 const builtBin = join(repoRoot, 'apps/cli/lib/bin.js')
 const webDist = join(repoRoot, 'apps/web/dist/index.html')
-// Full-text session search ships off (`openAt: never` on both layers): the
-// base patch carries the default, and the web restatement must not re-enable it.
+// 全文搜索在 base 与共享 GUI 层都保持关闭，浏览器传输层不再拥有该配置。
 const baseConfigPath = join(repoRoot, 'packages/bundle/base/cordis.patch.yml')
-const webConfigPath = join(repoRoot, 'packages/bundle/web-app/cordis.patch.yml')
+const guiConfigPath = join(repoRoot, 'packages/bundle/gui-app/cordis.patch.yml')
 const requireBuiltArtifacts = process.env.DSH_REQUIRE_BUILT_CLI_SMOKE === '1'
 
 interface ConfigRow {
@@ -104,15 +101,15 @@ describe.skipIf(!requireBuiltArtifacts)('built CLI lazy-search startup', () => {
     expect(existsSync(webDist), `missing Web dist ${resolve(webDist)}; run pnpm run build:web`).toBe(true)
     const baseRows = (yaml.load(await readFile(baseConfigPath, 'utf8'), { schema: configSchema }) as PatchEntry[])
       .flatMap(entry => entry.insert ?? [entry])
-    const webRows = (yaml.load(await readFile(webConfigPath, 'utf8'), { schema: configSchema }) as PatchEntry[])
+    const guiRows = (yaml.load(await readFile(guiConfigPath, 'utf8'), { schema: configSchema }) as PatchEntry[])
       .flatMap(entry => entry.insert ?? [entry])
     const baseRow = baseRows.find(row => row.id === 'session-query-sqlite')
-    const webRow = webRows.find(row => row.id === 'session-query-sqlite')
+    const guiRow = guiRows.find(row => row.id === 'session-query-sqlite')
     expect(baseRow?.config?.openAt).toBe('never')
     expect(baseRow?.disabled).toBeUndefined()
-    // The web restatement keeps the shipped default; opting in is a later layer's override.
-    expect(webRow?.config?.openAt).toBe('never')
-    expect(webRow?.disabled).toBeUndefined()
+    // 共享 GUI 层固定默认值；启用全文搜索仍由更后的用户层完整覆盖。
+    expect(guiRow?.config?.openAt).toBe('never')
+    expect(guiRow?.disabled).toBeUndefined()
 
     const cwd = await mkdtemp(join(tmpdir(), 'dsh-cli-lazy-search-'))
     try {

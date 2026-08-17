@@ -102,6 +102,14 @@ abstract validateImage(input: SaveImageAttachment): Promise<void>
 abstract saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef>
 
 /**
+ * 顺序读取并校验一批图片，在显式提交前不发布任何对象。
+ * 默认实现为仅实现单图 API 的 Provider 提供兼容语义；本地 Provider 会覆盖为磁盘暂存实现。
+ * @param inputs - 带精确声明长度的一次性图片字节源。
+ * @returns 可提交或清理的已准入批次。
+ */
+async prepareImages(inputs: readonly StreamImageAttachment[]): Promise<PreparedImageAttachmentBatch>
+
+/**
  * Read one image and verify that bytes still match the recorded reference.
  * @param ref - durable reference from the session log.
  * @param signal - optional cancellation for backend read and verification work.
@@ -109,7 +117,17 @@ abstract saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef>
  * @throws the signal reason when aborted, or a storage error when verification fails.
  */
 abstract readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment>
+
+/**
+ * 为界面读取一份最长边受限的图片预览。
+ * 默认实现返回已核验原图，具备图像处理能力的 Provider 应覆盖以减少跨进程字节量。
+ * @param ref - 会话日志中的持久附件引用。
+ * @param maxEdge - 预览图允许的最长边像素数。
+ * @param signal - 可选的读取取消信号。
+ * @returns 不产生新持久引用的派生图片字节。
+ */
+async readImagePreview( ref: ImageAttachmentRef, maxEdge: number, signal?: AbortSignal, ): Promise<ImageAttachmentPreview>
 ```
 
-Source: [`packages/attachment/attachment/src/index.ts:29`](../../packages/attachment/attachment/src/index.ts)
+Source: [`packages/attachment/attachment/src/index.ts:88`](../../packages/attachment/attachment/src/index.ts)
 <!-- END GENERATED cordis-surface -->

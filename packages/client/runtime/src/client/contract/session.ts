@@ -7,9 +7,9 @@
  * must stub); runtime-internal entry points (history staging, wire-frame
  * dispatch) stay on the class, invisible out here.
  */
-import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { ImageAttachmentRef, ImageReadPurpose } from '@deepseek-ai/dsh-attachment'
 import type {
-  MessageId, PromptContentPart, QueueAction, RpcResult, SessionId,
+  MessageId, PromptContentPart, PromptUploadContentPart, QueueAction, RpcResult, SessionId,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { ConversationSnapshot } from '../sessions/conversation.ts'
@@ -40,13 +40,25 @@ export interface ISession {
    */
   prompt(content: PromptContentPart[], mode: 'queue' | 'steer'): Promise<RpcResult<{ accepted: true }>>
   /**
-   * Resolve one durable image referenced by this session.
-   * @param attachmentId - opaque id found in the folded session log.
-   * @returns the authenticated reference and decoded bytes.
+   * 通过二进制请求体发送图片，避免在 Renderer 中生成完整 base64/JSON 副本。
+   * @param content - 文本与可重新打开的图片字节源。
+   * @param mode - queue 追加，steer 插入当前轮次。
+   * @returns 接受结果；失败同样写入 snapshot.promptError。
+   */
+  promptUpload(
+    content: readonly PromptUploadContentPart[],
+    mode: 'queue' | 'steer',
+  ): Promise<RpcResult<{ accepted: true }>>
+  /**
+   * 读取会话日志已经授权的持久图片。
+   * @param attachment - Host 日志投影返回的完整附件引用。
+   * @param purpose - 列表缩略图或用户主动打开的原图。
+   * @returns 经原始字节流构造的浏览器 Blob。
    */
   readAttachment(
-    attachmentId: AttachmentIdType,
-  ): Promise<RpcResult<{ attachment: ImageAttachmentRef; data: Uint8Array }>>
+    attachment: ImageAttachmentRef,
+    purpose?: ImageReadPurpose,
+  ): Promise<RpcResult<{ attachment: ImageAttachmentRef; data: Blob }>>
   /**
    * Apply one edit, remove, or strict steer action to a still-pending queue occurrence.
    * @param itemId - agent-owned inbox occurrence identity.

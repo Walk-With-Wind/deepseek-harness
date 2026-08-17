@@ -1,0 +1,1 @@
+dsh: Harness home is already in use by desktop Host pid <PID> (version fixture-owner). Close that Host and retry; the competing process was not modified.

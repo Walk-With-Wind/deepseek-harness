@@ -563,8 +563,10 @@ describe('boot', () => {
     const harness = tmp()
     const absolutePlugin = join(dir, 'absolute.mjs')
     const shadow = join(dir, 'node_modules', '@deepseek-ai', 'dsh-system-prompt')
+    const profileOnly = join(dir, 'node_modules', '@fixture', 'profile-only')
     const harnessPlugin = join(harness, 'node_modules', '@deepseek-ai', 'dsh-system-prompt')
     mkdirSync(shadow, { recursive: true })
+    mkdirSync(profileOnly, { recursive: true })
     mkdirSync(harnessPlugin, { recursive: true })
     writeFileSync(join(shadow, 'package.json'), JSON.stringify({
       name: '@deepseek-ai/dsh-system-prompt',
@@ -588,6 +590,17 @@ describe('boot', () => {
       '}',
       '',
     ].join('\n'))
+    writeFileSync(join(profileOnly, 'package.json'), JSON.stringify({
+      name: '@fixture/profile-only',
+      type: 'module',
+      exports: './index.mjs',
+    }))
+    writeFileSync(join(profileOnly, 'index.mjs'), [
+      'export function apply(ctx) {',
+      '  ctx.provide("profileOnlyPluginLoaded", true)',
+      '}',
+      '',
+    ].join('\n'))
     writeFileSync(join(dir, 'relative.mjs'), 'export function apply(ctx) { ctx.provide("relativePluginLoaded", true) }\n')
     writeFileSync(absolutePlugin, 'export function apply(ctx) { ctx.provide("absolutePluginLoaded", true) }\n')
     const entries = [
@@ -595,6 +608,8 @@ describe('boot', () => {
       "  name: '@deepseek-ai/dsh-system-prompt'",
       '- id: relative',
       "  name: './relative.mjs'",
+      '- id: profile-only',
+      "  name: '@fixture/profile-only'",
     ]
     const configOwnedPath = join(dir, 'config-owned.cordis.yml')
     writeFileSync(configOwnedPath, [...entries, ''].join('\n'))
@@ -616,10 +631,43 @@ describe('boot', () => {
     const harnessBaseUrl = pathToFileURL(join(harness, 'entry.mjs')).href
     const ctx = await boot(NAME, hostOwnedPath, undefined, undefined, harnessBaseUrl)
     try {
+      expect(ctx.get('hostModuleBaseUrl')).toBe(harnessBaseUrl)
       expect(ctx.get('harnessPluginLoaded')).toBe(true)
       expect(ctx.get('shadowPluginLoaded')).toBeUndefined()
       expect(ctx.get('relativePluginLoaded')).toBe(true)
       expect(ctx.get('absolutePluginLoaded')).toBe(true)
+      expect(ctx.get('profileOnlyPluginLoaded')).toBe(true)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('resolves a plugin exported by the closed host package itself', async () => {
+    const dir = tmp()
+    const host = tmp()
+    writeFileSync(join(host, 'package.json'), JSON.stringify({
+      name: '@fixture/closed-host',
+      type: 'module',
+      exports: {
+        './plugin': './plugin.mjs',
+      },
+    }))
+    writeFileSync(join(host, 'plugin.mjs'), [
+      'export function apply(ctx) {',
+      '  ctx.provide("closedHostPluginLoaded", true)',
+      '}',
+      '',
+    ].join('\n'))
+    writeFileSync(join(dir, 'cordis.yml'), [
+      '- id: self-export',
+      "  name: '@fixture/closed-host/plugin'",
+      '',
+    ].join('\n'))
+
+    const hostBaseUrl = pathToFileURL(join(host, 'entry.mjs')).href
+    const ctx = await boot(NAME, join(dir, 'cordis.yml'), undefined, undefined, hostBaseUrl)
+    try {
+      expect(ctx.get('closedHostPluginLoaded')).toBe(true)
     } finally {
       await ctx.fiber.dispose()
     }

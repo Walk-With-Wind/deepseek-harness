@@ -84,6 +84,19 @@ describe('manifest round-trip', () => {
 })
 
 describe('resolveBundleDir', () => {
+  it('resolves the installed application when the application is itself a profile bundle', () => {
+    const appDir = tmp()
+    const anchor = join(appDir, 'package.json')
+    const profileDir = tmp()
+    writeFileSync(anchor, JSON.stringify({
+      name: '@deepseek-ai/dsh-desktop',
+      dsh: { bundle: { patch: './cordis.patch.yml' } },
+    }))
+    writeFileSync(join(profileDir, 'package.json'), '{}')
+
+    expect(resolveBundleDir('t', '@deepseek-ai/dsh-desktop', anchor, profileDir)).toBe(appDir)
+  })
+
   it('prefers the installation anchor, falls back to the profile, and fails loud', () => {
     const anchor = stageInstallation({ 'in-box': { patch: '[]\n' } })
     const profileDir = tmp()
@@ -151,7 +164,16 @@ describe('loadProfile', () => {
     // The web template auto-initializes on first load. Bundle resolution
     // cannot be asserted to fail here: the source-plane test runner resolves
     // @deepseek-ai/* through tsconfig paths regardless of the staged anchor.
-    expect(PROFILE_TEMPLATES.web).toContain('@deepseek-ai/dsh-base')
+    expect(PROFILE_TEMPLATES.web).toEqual([
+      '@deepseek-ai/dsh-base',
+      '@deepseek-ai/dsh-gui-app',
+      '@deepseek-ai/dsh-web-app',
+    ])
+    expect(PROFILE_TEMPLATES.desktop).toEqual([
+      '@deepseek-ai/dsh-base',
+      '@deepseek-ai/dsh-gui-app',
+      '@deepseek-ai/dsh-desktop',
+    ])
     try {
       loadProfile('t', 'web', anchor, home)
     } catch {

@@ -145,6 +145,8 @@ export default defineConfig({
       { find: /^@deepseek-ai\/dsh-client-ui-primitives$/, replacement: src('../../packages/client/ui-primitives/src/index.ts') },
       { find: /^@deepseek-ai\/dsh-client-ui-attachment$/, replacement: src('../../packages/client/ui-attachment/src/index.ts') },
       { find: /^@deepseek-ai\/dsh-client-schema-form$/, replacement: src('../../packages/client/schema-form/src/index.ts') },
+      // `./client` 是模块加载器闭包产物；GUI 外壳必须直接编译源码，不能把它当作标准 ESM 导入。
+      { find: /^@deepseek-ai\/dsh-client-connection\/client$/, replacement: src('../../packages/client/connection/src/client/index.ts') },
       { find: /^@deepseek-ai\/dsh-client-modules\/client$/, replacement: src('../../packages/client/modules/src/client/index.ts') },
     ],
   },
