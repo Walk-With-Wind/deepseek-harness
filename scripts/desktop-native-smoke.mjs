@@ -18,12 +18,13 @@ if (!existsSync(asar) || !existsSync(unpacked)) {
 }
 
 const appRequire = createRequire(join(asar, 'package.json'))
-const loadedAddons = []
-for (const path of collectFiles(unpacked).filter(path => path.endsWith('.node')).sort()) {
-  appRequire(path)
-  loadedAddons.push(path.slice(unpacked.length + 1).replaceAll('\\', '/'))
-}
-if (loadedAddons.length === 0) throw new Error('desktop-native-smoke: 未实际加载任何 .node 文件')
+const packagedAddons = collectFiles(unpacked)
+  .filter(path => path.endsWith('.node'))
+  .map(path => path.slice(unpacked.length + 1).replaceAll('\\', '/'))
+  .sort()
+if (packagedAddons.length === 0) throw new Error('desktop-native-smoke: 最终安装目录未包含任何 .node 文件')
+
+// 原生包可能同时携带 glibc、musl 等变体；必须通过包入口只加载当前平台选中的实现。
 
 const sharp = appRequire('sharp')
 const png = await sharp({
@@ -58,7 +59,7 @@ if (process.platform === 'linux' && landlockVerdict === 'unusable') {
 
 console.log(JSON.stringify({
   outcome: 'passed',
-  loadedAddons,
+  packagedAddons,
   sharpBytes: png.byteLength,
   ripgrep: rg.stdout.trim().split(/\r?\n/, 1)[0],
   pty: 'passed',

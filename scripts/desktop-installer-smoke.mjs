@@ -114,11 +114,11 @@ function runInitialInstalledSmoke(executable) {
       ? ['-a', process.execPath, performanceSmokeScript]
       : [performanceSmokeScript]
     run(performanceCommand, performanceArgs, {
-      cwd: dirname(executable),
+      cwd: product,
       env: {
         ...process.env,
         DSH_DESKTOP_SMOKE_EXECUTABLE: executable,
-        DSH_DESKTOP_SMOKE_PRODUCT: dirname(executable),
+        DSH_DESKTOP_SMOKE_PRODUCT: product,
       },
     })
   }
