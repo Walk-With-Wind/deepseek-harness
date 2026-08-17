@@ -1,21 +1,22 @@
 /** Desktop 原生菜单模板；平台差异只决定更新入口文案。 */
 import type { MenuItemConstructorOptions } from 'electron'
+import { assertDesktopReleasePlatform } from '../shared/release-policy.ts'
 
 export interface DesktopMenuActions {
   readonly checkForUpdates: () => void
-  readonly openReleasePage: () => void
   readonly exportDiagnostics: () => void
 }
 
 /** 构造带标准编辑/窗口角色的最小产品菜单。 */
 export function createDesktopMenuTemplate(
   platform: NodeJS.Platform,
-  updatesSupported: boolean,
   actions: DesktopMenuActions,
 ): MenuItemConstructorOptions[] {
-  const updateItem: MenuItemConstructorOptions = updatesSupported
-    ? { label: '检查更新…', click: actions.checkForUpdates }
-    : { label: '查看升级说明…', click: actions.openReleasePage }
+  assertDesktopReleasePlatform(platform)
+  const updateItem: MenuItemConstructorOptions = {
+    label: '检查更新…',
+    click: actions.checkForUpdates,
+  }
   const applicationMenu: MenuItemConstructorOptions = {
     label: 'DeepSeek Harness',
     submenu: [

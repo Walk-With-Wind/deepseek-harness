@@ -116,26 +116,6 @@ describe('runtime staging', () => {
     await expect(verifyNativeRuntimeFiles(root, 'darwin', 'x64')).rejects.toThrow(/不包含目标架构/)
   })
 
-  it('把 Linux Landlock launcher 纳入执行位与架构清单', async () => {
-    const root = await fixture()
-    const launcher = join(
-      root, 'node_modules', '@deepseek-ai',
-      'node-addon-landlock-run-linux-x64', 'bin', 'landlock-run',
-    )
-    await mkdir(join(launcher, '..'), { recursive: true })
-    const elf = new Uint8Array(64)
-    elf.set([0x7f, 0x45, 0x4c, 0x46, 2, 1])
-    new DataView(elf.buffer).setUint16(18, 0x3e, true)
-    await writeFile(launcher, elf)
-
-    await ensureKnownNativeExecutableModes(root, 'linux', 'x64')
-    await expect(verifyNativeRuntimeFiles(root, 'linux', 'x64')).resolves.toEqual([{
-      relativePath: 'node_modules/@deepseek-ai/node-addon-landlock-run-linux-x64/bin/landlock-run',
-      kind: 'landlock',
-      architectures: ['x64'],
-    }])
-  })
-
   it('只保留 node-pty 的目标平台预编译目录', async () => {
     const root = await fixture()
     const prebuilds = join(root, 'node_modules', 'node-pty', 'prebuilds')
@@ -149,16 +129,6 @@ describe('runtime staging', () => {
 
     await expect(readdir(prebuilds)).resolves.toEqual(['darwin-arm64'])
     await expect(readdir(join(root, 'node_modules', 'node-pty', 'third_party'))).resolves.toEqual([])
-  })
-
-  it('Linux glibc 产物删除 Koffi 的 musl 原生变体', async () => {
-    const root = await fixture()
-    const koffi = join(root, 'node_modules', '@koromix', 'koffi-linux-x64')
-    await Promise.all(['linux_x64', 'musl_x64'].map(name => mkdir(join(koffi, name), { recursive: true })))
-
-    await pruneKnownNativeVariants(root, 'linux', 'x64')
-
-    await expect(readdir(koffi)).resolves.toEqual(['linux_x64'])
   })
 
   it('Windows 只保留目标架构的 node-pty ConPTY 运行库', async () => {

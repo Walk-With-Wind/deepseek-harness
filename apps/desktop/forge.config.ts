@@ -3,9 +3,7 @@ import { join, resolve } from 'node:path'
 import { flipFuses, FuseVersion, FuseV1Options, type FuseConfig } from '@electron/fuses'
 import type { ForgeConfig } from '@electron-forge/shared-types'
 import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-natives'
-import { MakerDeb } from '@electron-forge/maker-deb'
 import { MakerDMG } from '@electron-forge/maker-dmg'
-import { MakerRpm } from '@electron-forge/maker-rpm'
 import { MakerSquirrel } from '@electron-forge/maker-squirrel'
 import { MakerZIP } from '@electron-forge/maker-zip'
 import {
@@ -17,8 +15,8 @@ import {
 const appRoot = import.meta.dirname
 const assets = resolve(appRoot, 'assets')
 const signingEnabled = process.env.DSH_DESKTOP_SIGNING === '1'
-// Forge 的执行宿主与打包目标可能不同，所有发行目标的共享库都必须进入解包白名单。
-const sharedLibraryUnpack = '{**/*.dylib,**/*.dll,**/*.so,**/*.so.*}'
+// Forge 的执行宿主与打包目标可能不同，macOS 和 Windows 共享库都必须进入解包白名单。
+const sharedLibraryUnpack = '{**/*.dylib,**/*.dll}'
 
 /** Electron 43 全部 V1 fuse 的显式发行状态。 */
 export const desktopFuseConfig = {
@@ -115,7 +113,7 @@ const config = {
     appCategoryType: 'public.app-category.developer-tools',
     appCopyright: 'Copyright © DeepSeek AI',
     asar: {
-      unpack: `{**/*.node,${sharedLibraryUnpack},**/*-spawn-helper,**/spawn-helper,**/@vscode/ripgrep*/**/rg,**/@vscode/ripgrep*/**/rg.exe,**/@deepseek-ai/node-addon-landlock-run-linux-*/bin/landlock-run}`,
+      unpack: `{**/*.node,${sharedLibraryUnpack},**/*-spawn-helper,**/spawn-helper,**/@vscode/ripgrep*/**/rg,**/@vscode/ripgrep*/**/rg.exe}`,
     },
     icon: process.platform === 'darwin'
       ? resolve(assets, 'icon.icns')
@@ -137,7 +135,7 @@ const config = {
     force: true,
     // Electron Rebuild 的 onlyModules 仍会递归生产依赖图；空 types 配合 extraModules 只遍历明确原生模块。
     types: [],
-    extraModules: ['koffi', 'node-pty', '@deepseek-ai/node-addon-landlock-run'],
+    extraModules: ['koffi', 'node-pty'],
   },
   hooks: {
     packageAfterCopy: async (forgeConfig, buildPath, _electronVersion, platform, arch) => {
@@ -161,28 +159,6 @@ const config = {
       setupExe: 'DeepSeek-Harness-Setup.exe',
       noMsi: true,
       ...squirrelSigning,
-    }),
-    new MakerDeb({
-      options: {
-        bin: DESKTOP_EXECUTABLE_NAME,
-        name: 'deepseek-harness',
-        productName: 'DeepSeek Harness',
-        genericName: 'AI Agent Harness',
-        categories: ['Development', 'Utility'],
-        maintainer: 'DeepSeek AI',
-        icon: resolve(assets, 'icon.png'),
-      },
-    }),
-    new MakerRpm({
-      options: {
-        bin: DESKTOP_EXECUTABLE_NAME,
-        name: 'deepseek-harness',
-        productName: 'DeepSeek Harness',
-        genericName: 'AI Agent Harness',
-        categories: ['Development', 'Utility'],
-        icon: resolve(assets, 'icon.png'),
-        license: 'MIT',
-      },
     }),
   ],
   plugins: [new AutoUnpackNativesPlugin({})],

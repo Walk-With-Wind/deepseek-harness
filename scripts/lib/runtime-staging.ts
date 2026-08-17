@@ -10,7 +10,7 @@ import ts from 'typescript'
 /** staging 完成后可审计的原生文件记录。 */
 export interface NativeRuntimeFile {
   readonly relativePath: string
-  readonly kind: 'node-addon' | 'shared-library' | 'spawn-helper' | 'ripgrep' | 'landlock'
+  readonly kind: 'node-addon' | 'shared-library' | 'spawn-helper' | 'ripgrep'
   readonly architectures: readonly ('x64' | 'arm64')[]
 }
 
@@ -407,7 +407,7 @@ export async function verifyNativeRuntimeFiles(
     const kind = nativeKind(relativePath, platform)
     if (kind === undefined) continue
     const metadata = await lstat(path)
-    if (platform !== 'win32' && (kind === 'spawn-helper' || kind === 'ripgrep' || kind === 'landlock')
+    if (platform !== 'win32' && (kind === 'spawn-helper' || kind === 'ripgrep')
       && (metadata.mode & 0o111) === 0) {
       throw new Error(`runtime-staging: 原生可执行文件缺少执行位 ${relativePath}`)
     }
@@ -439,17 +439,6 @@ export async function pruneKnownNativeVariants(
       if (!entry.isDirectory() || entry.name === keep) continue
       await rm(join(prebuilds, entry.name), { recursive: true, force: true })
     }
-  }
-
-  if (platform === 'linux') {
-    // Desktop Linux 以 glibc 为发行基线；移除 Koffi 同包携带且无法在该基线上加载的 musl 变体。
-    await rm(join(
-      staging,
-      'node_modules',
-      '@koromix',
-      `koffi-linux-${arch}`,
-      `musl_${arch}`,
-    ), { recursive: true, force: true })
   }
 
   const conpty = join(staging, 'node_modules', 'node-pty', 'third_party', 'conpty')
@@ -488,7 +477,7 @@ export async function ensureKnownNativeExecutableModes(
   for (const path of await collectFiles(ripgrepRoot)) {
     const relativePath = relative(staging, path).split(sep).join('/')
     const kind = nativeKind(relativePath, platform)
-    if (kind === 'ripgrep' || kind === 'landlock') candidates.push(path)
+    if (kind === 'ripgrep') candidates.push(path)
   }
   for (const path of candidates) {
     if (existsSync(path)) await chmod(path, 0o755)
@@ -498,14 +487,9 @@ export async function ensureKnownNativeExecutableModes(
 function nativeKind(relativePath: string, platform: NodeJS.Platform): NativeRuntimeFile['kind'] | undefined {
   if (relativePath.endsWith('.node')) return 'node-addon'
   if ((platform === 'darwin' && relativePath.endsWith('.dylib'))
-    || (platform === 'win32' && relativePath.endsWith('.dll'))
-    || (platform === 'linux' && /\.so(?:\.\d+)*$/.test(relativePath))) return 'shared-library'
+    || (platform === 'win32' && relativePath.endsWith('.dll'))) return 'shared-library'
   if (/(?:^|\/)spawn-helper$/.test(relativePath)) return 'spawn-helper'
   if (/(?:^|\/)@vscode\/ripgrep(?:-[^/]+)?\/(?:.*\/)?rg(?:\.exe)?$/.test(relativePath)) return 'ripgrep'
-  if (platform === 'linux'
-    && /(?:^|\/)@deepseek-ai\/node-addon-landlock-run-linux-(?:x64|arm64)\/bin\/landlock-run$/.test(relativePath)) {
-    return 'landlock'
-  }
   return undefined
 }
 

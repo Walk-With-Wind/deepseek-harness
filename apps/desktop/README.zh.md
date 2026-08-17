@@ -32,15 +32,15 @@ pnpm run verify:desktop-materials
 
 `package:desktop` 和 `make:desktop` 会在已忽略的 `.artifacts/desktop/` 目录中暂存物化后的生产依赖闭包，针对当前平台与架构重建原生模块，再调用 Electron Forge。`make:desktop` 还会从最终 staging 树和安装器字节派生更新元数据、SHA-256 校验和、CycloneDX SBOM、精确的第三方 notices、应用许可证和构建来源证明。许可证生成只接受依赖自带的可验证正文或版本／内容 hash 均匹配的已审计补充文件；新的缺失许可证依赖会直接阻断构建。
 
-`test:desktop:packaged` 验证未安装 packaged application。其 Utility 持有 Host 租约期间，smoke 会启动第二份 packaged Desktop，要求它完成单实例交接后正常退出且首实例保持存活；还会让真实 headless CLI 与 Web profile 争用同一 home，要求二者都在挂载插件前以租约冲突退出，并验证全部竞争前后的会话、Workspace storage、附件、设置与凭据字节均未变化。`test:desktop:installer` 只允许在一次性 CI runner 上运行，会安装真实 `.dmg`、Squirrel、`.deb` 或 `.rpm`，检查离线启动、最终进程树、无监听端口、沙箱 Renderer 启动、Utility／Renderer 恢复、Utility 连续失败后打开熔断、强制终止 Main 后使用同一 home 恢复、quiescent 关停和原生模块实际加载。随后它卸载并验证应用已移除，重装同一 maker 产物，再次执行 packaged 启动 smoke，最后完成卸载与清理。共享 lane 测量请求和响应均为 1 KiB 的 unary IPC 额外 p95 往返开销。macOS lane 只篡改一次性应用副本，重新进行 ad-hoc 签名，并要求 ASAR integrity 拒绝启动。受保护矩阵通过已安装的 Renderer／Preload／Main／Utility 进程链各执行一次取消和成功的 1 GiB 导出，并记录 Utility RSS。所有签名目标成功后，独立四目标矩阵会下载并安装每个已签名产物，运行 60 分钟流式响应／取消，替换 Renderer 窗口以轮换真实 `MessagePort` 连接，并要求 Utility 资源计数回到基线。[Desktop 发行 runbook](../../docs/cookbook/releasing-desktop.md#4-exercise-install-and-update-paths)负责最终安装 GUI 的验收记录。
+`test:desktop:packaged` 验证未安装 packaged application。其 Utility 持有 Host 租约期间，smoke 会启动第二份 packaged Desktop，要求它完成单实例交接后正常退出且首实例保持存活；还会让真实 headless CLI 与 Web profile 争用同一 home，要求二者都在挂载插件前以租约冲突退出，并验证全部竞争前后的会话、Workspace storage、附件、设置与凭据字节均未变化。`test:desktop:installer` 只允许在一次性 CI runner 上运行，会安装真实 `.dmg` 或 Squirrel 产物，检查离线启动、最终进程树、无监听端口、沙箱 Renderer 启动、Utility／Renderer 恢复、Utility 连续失败后打开熔断、强制终止 Main 后使用同一 home 恢复、quiescent 关停和原生模块实际加载。随后它卸载并验证应用已移除，重装同一 maker 产物，再次执行 packaged 启动 smoke，最后完成卸载与清理。共享 lane 测量请求和响应均为 1 KiB 的 unary IPC 额外 p95 往返开销。macOS lane 只篡改一次性应用副本，重新进行 ad-hoc 签名，并要求 ASAR integrity 拒绝启动。受保护矩阵通过已安装的 Renderer／Preload／Main／Utility 进程链各执行一次取消和成功的 1 GiB 导出，并记录 Utility RSS。所有签名目标成功后，独立三目标矩阵会下载并安装每个已签名产物，运行 60 分钟流式响应／取消，替换 Renderer 窗口以轮换真实 `MessagePort` 连接，并要求 Utility 资源计数回到基线。[Desktop 发行 runbook](../../docs/cookbook/releasing-desktop.md#4-exercise-install-and-update-paths)负责最终安装 GUI 的验收记录。
 
-Desktop 发行构建必须在对应目标原生执行：macOS arm64、macOS x64、Windows x64 和 Linux x64。macOS 调查构建使用临时 ad-hoc 签名，以便原生 updater 能在 fuse 修改后读取应用 bundle 身份；该签名不提供发行身份。设置 `DSH_DESKTOP_SIGNING=1` 后，macOS 使用 Developer ID 签名与公证，Windows 使用受信 Authenticode 签名。受保护 CI 环境提供平台凭据，`DSH_DESKTOP_REQUIRE_SIGNING=1` 会让产物验证拒绝缺少所需发行签名的产品。[发行 cookbook](../../docs/cookbook/releasing-desktop.md)负责凭据名称与发布顺序。
+Desktop 发行构建必须在对应目标原生执行：macOS arm64、macOS x64 和 Windows x64。macOS 调查构建使用临时 ad-hoc 签名，以便原生 updater 能在 fuse 修改后读取应用 bundle 身份；该签名不提供发行身份。设置 `DSH_DESKTOP_SIGNING=1` 后，macOS 使用 Developer ID 签名与公证，Windows 使用受信 Authenticode 签名。受保护 CI 环境提供平台凭据，`DSH_DESKTOP_REQUIRE_SIGNING=1` 会让产物验证拒绝缺少所需发行签名的产品。[发行 cookbook](../../docs/cookbook/releasing-desktop.md)负责凭据名称与发布顺序。
 
 ## 运行时与故障行为
 
 Main 与 Utility 使用严格且带版本的控制协议通信。每次 Renderer 连接都会获得绑定新 generation 的 `MessagePort` 通道；Main 校验发送方和命令信封，但不解释 API 请求或响应正文。共享连接控制器必须先通过该端口完成一次 unary `host.describe` 请求并打开两条事件流，Renderer 才报告 ready，因此 packaged readiness 证明的是业务通道可达，而不只是传输层 hello。原生路径交接使用绑定 generation 的一次性 operation id：Utility 授权规范目标，Main 执行默认应用／文本编辑器打开器，取消或 generation 替换会移除等待中的操作。Utility 崩溃采用带有界抖动的指数退避恢复；Renderer 崩溃只替换窗口；连续失败会打开恢复熔断，并把重试和诊断导出保留为用户显式操作。包内 `desktop.config.json` 是严格校验的应用私有配置，未知字段、越界值以及不一致的 base／maximum／jitter 组合都会在创建运行时前失败。
 
-关停会先停止新工作，请求 Utility flush 并 dispose，等待 `host/quiescent`，随后才退出或安装更新。超过宽限期会升级终止，但不会宣称已达到 quiescent。macOS 与 Windows 通过 Electron 原生 updater 访问编译进应用的 HTTPS 源；Linux 显示包管理器或发行页指引，不模拟应用内更新。
+关停会先停止新工作，请求 Utility flush 并 dispose，等待 `host/quiescent`，随后才退出或安装更新。超过宽限期会升级终止，但不会宣称已达到 quiescent。macOS 与 Windows 通过 Electron 原生 updater 访问编译进应用的 HTTPS 源。
 
 日志是 `<DSH_HOME>/logs/desktop/` 下仅属主可读写、按大小限制的 JSONL 文件，只允许稳定事件码和数值生命周期字段。诊断导出会先显示内容与排除项确认，再原子写入 ZIP；包内包含构建身份、安全摘要、配置值、不可逆 home／资源标识、更新状态和白名单日志，明确排除凭据、环境变量、会话／模型正文、工作区内容、插件源码与绝对路径。
 
@@ -62,6 +62,5 @@ Desktop 不增加模型可见文本。它与 Web UI 使用相同的 GUI 组合�
 
 ## 已知限制与暂缓事项
 
-- Linux 通过发行版软件包或发行页升级；该平台有意不提供 Electron 原生 updater。
 - 首发仅包含一个主窗口，不包含托盘、深链、远程 Host 或不可信插件沙箱。
 - 已签名／公证安装器和更新验证依赖受保护的原生 CI 矩阵；本机未签名 package 只能证明 staging 与运行时行为，不能证明发行身份。

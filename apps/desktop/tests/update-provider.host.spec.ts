@@ -22,21 +22,18 @@ class FakeNativeUpdater implements NativeUpdateAdapter {
 
 function provider(native: FakeNativeUpdater, version = '1.2.3'): DesktopUpdateProvider {
   return new DesktopUpdateProvider({
-    platform: 'darwin', arch: 'arm64', currentVersion: version,
-    releasePageUrl: 'https://github.com/deepseek-ai/deepseek-harness/releases',
+    platform: 'darwin', currentVersion: version,
     allowedFeedOrigin: 'https://desktop-updates.deepseek.com', native,
   })
 }
 
 describe('DesktopUpdateProvider', () => {
-  it('Linux 只给出包管理器指引，不创建假应用内更新入口', () => {
-    const update = new DesktopUpdateProvider({
-      platform: 'linux', arch: 'x64', currentVersion: '1.2.3',
-      releasePageUrl: 'https://github.com/deepseek-ai/deepseek-harness/releases',
+  it('拒绝为非发行平台创建更新状态机', () => {
+    expect(() => new DesktopUpdateProvider({
+      platform: 'linux', currentVersion: '1.2.3',
       allowedFeedOrigin: 'https://desktop-updates.deepseek.com',
-    })
-    expect(update.state()).toMatchObject({ phase: 'UNSUPPORTED', supported: false })
-    expect(update.check()).toBe(false)
+      native: new FakeNativeUpdater(),
+    })).toThrow(/不支持/)
   })
 
   it('把检查、自动下载、用户批准和 quiescent 后安装分成明确阶段', () => {
@@ -46,7 +43,7 @@ describe('DesktopUpdateProvider', () => {
     expect(native.check).toHaveBeenCalledOnce()
     native.emit({ type: 'available' })
     expect(update.state()).toEqual({
-      phase: 'DOWNLOADING', supported: true, channel: 'stable', currentVersion: '1.2.3',
+      phase: 'DOWNLOADING', channel: 'stable', currentVersion: '1.2.3',
     })
     native.emit({ type: 'downloaded', version: '1.3.0', updateUrl: 'https://desktop-updates.deepseek.com/stable/mac.zip' })
     expect(update.state()).toMatchObject({ phase: 'READY', targetVersion: '1.3.0' })

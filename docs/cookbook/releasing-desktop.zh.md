@@ -21,7 +21,7 @@
 | Windows | `DSH_WINDOWS_CERTIFICATE_PFX_BASE64` | 导入 job 工作目录的 Base64 Authenticode PFX |
 | Windows | `DSH_WINDOWS_CERTIFICATE_PASSWORD` | PFX 密码 |
 
-组织签名服务可以在等效的受保护 runner 中设置 `DSH_WINDOWS_SIGN_WITH_PARAMS` 来替代 Windows PFX；Forge 配置同时只接受一种签名方式。Linux 仓库签名由仓库发布系统持有，不在应用构建中模拟。
+组织签名服务可以在等效的受保护 runner 中设置 `DSH_WINDOWS_SIGN_WITH_PARAMS` 来替代 Windows PFX；Forge 配置同时只接受一种签名方式。
 
 ## 1. 验证冻结源
 
@@ -42,7 +42,7 @@ pnpm run website:build
 
 ## 2. 构建原生矩阵
 
-人工运行 `Desktop` workflow，并设置 `release=true`。签名矩阵使用原生 `macos-15` arm64、`macos-15-intel` x64、`windows-2022` x64 和 `ubuntu-22.04` x64 runner。每个 job 都会从冻结 lockfile 安装、重建 Electron 原生依赖、执行 Forge maker、验证 packaged application、安装最终 maker 产物并重新派生发行材料。完整签名矩阵成功后，独立受保护矩阵会在同样的四个原生目标下载并安装每个签名产物，再针对全部安装结果执行 60 分钟 IPC 流式耐久。最终矩阵 job 要求两个阶段都成功，拒绝部分结果。
+人工运行 `Desktop` workflow，并设置 `release=true`。签名矩阵使用原生 `macos-15` arm64、`macos-15-intel` x64 和 `windows-2022` x64 runner。每个 job 都会从冻结 lockfile 安装、重建 Electron 原生依赖、执行 Forge maker、验证 packaged application、安装最终 maker 产物并重新派生发行材料。完整签名矩阵成功后，独立受保护矩阵会在同样的三个原生目标下载并安装每个签名产物，再针对全部安装结果执行 60 分钟 IPC 流式耐久。最终矩阵 job 要求两个阶段都成功，拒绝部分结果。
 
 在匹配平台与架构上进行本机未签名调查时运行：
 
@@ -58,15 +58,15 @@ pnpm run verify:desktop-materials
 
 ## 3. 检查发行族
 
-把四个受保护 artifact 下载到隔离审阅目录。每个平台目录都必须包含安装器／更新包，以及 `update-manifest-<platform>-<arch>.json`、`SHA256SUMS`、`desktop-sbom.cdx.json`、`THIRD_PARTY_NOTICES.md`、`LICENSE` 和 `build-provenance.json`。macOS 还包含 `releases-darwin-<arch>.json`，Windows 包含 Squirrel `RELEASES` 发行族。
+把三个受保护 artifact 下载到隔离审阅目录。每个平台目录都必须包含安装器／更新包，以及 `update-manifest-<platform>-<arch>.json`、`SHA256SUMS`、`desktop-sbom.cdx.json`、`THIRD_PARTY_NOTICES.md`、`LICENSE` 和 `build-provenance.json`。macOS 还包含 `releases-darwin-<arch>.json`，Windows 包含 Squirrel `RELEASES` 发行族。
 
 确认所有 build-provenance 文件都标明同一个冻结 commit、源日期、版本、目标平台和目标架构。对下载字节重新计算 SHA-256。在原始 job 或等效受控重建中重新运行 `pnpm run verify:desktop-materials`，将 SBOM component 和第三方 notices 与 staged production closure 比对。许可证门禁必须拒绝任何没有依赖自带正文、且不在精确 package identity／version／正文 hash 审计表中的外部包；不得用 manifest 中的 SPDX 表达式替代法律正文。
 
-在 macOS 对最终 application／DMG 运行 `codesign --verify --deep --strict`、`spctl --assess --type execute` 和 `xcrun stapler validate`。在 Windows，要求应用 exe 和每个分发 installer exe 的 `Get-AuthenticodeSignature` 返回 `Valid`，并具有时间戳和已批准 subject。在 Linux 检查包元数据，在目标基线中安装并移除两种格式，同时验证 desktop entry、图标、依赖与可执行权限。
+在 macOS 对最终 application／DMG 运行 `codesign --verify --deep --strict`、`spctl --assess --type execute` 和 `xcrun stapler validate`。在 Windows，要求应用 exe 和每个分发 installer exe 的 `Get-AuthenticodeSignature` 返回 `Valid`，并具有时间戳和已批准 subject。
 
 ## 4. 演练安装与更新
 
-在没有 checkout、全局 Node、pnpm 或既有 Harness home 的干净 OS 账户中安装每个最终产物。自动 installer smoke 会在阻断代理和无 API key 下启动，验证 Renderer 安全启动、真实进程树、无 TCP／UDP listener、Renderer 与 Utility 分别崩溃后的恢复和独立熔断域、强制终止 Main 后使用同一 home 恢复、quiescent 退出、全部 `.node` load，以及 sharp、Koffi、PTY、ripgrep、Landlock 的功能探针。随后它卸载并验证应用已移除，重装同一 maker 产物，再次执行 packaged 启动 smoke，最后完成卸载与清理。共享 lane 要求请求和响应均为 1 KiB 的 unary IPC 额外 p95 往返开销不超过 10 ms。每个 macOS lane 都会篡改一次性应用副本内 `lib/main.js` 注释中的一个字节，并对该副本重新进行 ad-hoc 签名，避免 OS 签名失败掩盖结果；Electron 必须在 Renderer ready 前报告 ASAR integrity 失败。在一次性 CI home 中，只用于验收的可信插件提供有界合成持久化、谱系与附件数据源，Main 则把目标固定到 owner-only 目录；已安装 GUI 通过 Renderer、Preload、Main 与 Utility 调用正常保存和取消命令，由生产 Session 导出 handler 生成 ZIP。发行门禁各完成一次取消和一个不小于 1 GiB 的成功归档，验证中央目录内的 Session／媒体条目及流式 SHA-256，要求原子清理，并把 Utility RSS 增长限制在 128 MiB。受保护矩阵还会从不同 home 保留 20 个冷启动原始样本，并从同一个共享 home 保留 20 个温启动／RSS 原始样本；关停 p95 会同时包含两组样本。进程 smoke 不能替代以下用户流程检查。
+在没有 checkout、全局 Node、pnpm 或既有 Harness home 的干净 OS 账户中安装每个最终产物。自动 installer smoke 会在阻断代理和无 API key 下启动，验证 Renderer 安全启动、真实进程树、无 TCP／UDP listener、Renderer 与 Utility 分别崩溃后的恢复和独立熔断域、强制终止 Main 后使用同一 home 恢复、quiescent 退出、全部 `.node` load，以及 sharp、Koffi、PTY 和 ripgrep 的功能探针。随后它卸载并验证应用已移除，重装同一 maker 产物，再次执行 packaged 启动 smoke，最后完成卸载与清理。共享 lane 要求请求和响应均为 1 KiB 的 unary IPC 额外 p95 往返开销不超过 10 ms。每个 macOS lane 都会篡改一次性应用副本内 `lib/main.js` 注释中的一个字节，并对该副本重新进行 ad-hoc 签名，避免 OS 签名失败掩盖结果；Electron 必须在 Renderer ready 前报告 ASAR integrity 失败。在一次性 CI home 中，只用于验收的可信插件提供有界合成持久化、谱系与附件数据源，Main 则把目标固定到 owner-only 目录；已安装 GUI 通过 Renderer、Preload、Main 与 Utility 调用正常保存和取消命令，由生产 Session 导出 handler 生成 ZIP。发行门禁各完成一次取消和一个不小于 1 GiB 的成功归档，验证中央目录内的 Session／媒体条目及流式 SHA-256，要求原子清理，并把 Utility RSS 增长限制在 128 MiB。受保护矩阵还会从不同 home 保留 20 个冷启动原始样本，并从同一个共享 home 保留 20 个温启动／RSS 原始样本；关停 p95 会同时包含两组样本。进程 smoke 不能替代以下用户流程检查。
 
 每个 60 分钟耐久 job 都会让一个最终安装目标连接由测试驱动进程持有的、仅监听回环的 OpenAI 兼容 provider。耐久流量开始前，已安装 Renderer 会通过 Preload 转交的 Electron `MessagePort` 发送 20 次预热和 100 次测量用 1 KiB unary 请求；门禁减去同一个 Utility handler 的 p95 耗时，并要求额外往返开销不超过 10 ms。随后它持续拉取 4 KiB 响应分块，每第五个 turn 取消，并每 100 个请求终止受监督 Renderer，使 Main 替换 BrowserWindow 并连接新的真实 `MessagePort`。临时可信 Utility 插件只记录 bridge、registry、reader、导出、对话框与原生路径聚合计数；最终稳定快照必须与初始基线相同。每个 job 每分钟记录已安装 Main／Utility／Renderer RSS，要求请求完成、取消且至少有两个端口代际，把峰值增长限制在 128 MiB，并把尾部窗口相对头部窗口的增长限制在 64 MiB。即使失败，它也会关闭 provider、移除应用并删除两个一次性 home。保留证据只包含脱敏指标，不包含流正文或路径。
 
@@ -81,9 +81,9 @@ pnpm run verify:desktop-materials
 | A-F05 | 验证历史、搜索、投影、附件上传和生成文件操作继续使用既有 Host 数据；通过捕获 endpoint 加载 HTTPS Markdown 图片并确认没有 Referer，同时 HTTP 与本机相对图片均不加载。 |
 | A-F06 | 通过原生保存对话框取消一次 Session ZIP 导出并成功完成一次；确认没有 sibling 临时文件残留，并将成功 ZIP 的条目名与 digest 同一 Session 的 Web 导出比较。 |
 | A-F07 | 在系统浏览器打开一个 allowlist 内的仓库或产品文档 HTTPS 链接，再尝试非 allowlist HTTPS URL 以及 `file:`、带凭据、`javascript:` 和 `data:` URL；应用窗口保持在 `app://localhost`，全部禁用目标都未打开。 |
-| A-F08 | 比对 About、导出的诊断 build 记录、安装器 provenance 和 canary 更新状态；版本、源 commit、平台与架构必须指向同一候选版本，Linux 必须显示包管理器指引而不是安装操作。 |
+| A-F08 | 比对 About、导出的诊断 build 记录、安装器 provenance 和 canary 更新状态；版本、源 commit、平台与架构必须指向同一候选版本。 |
 
-对于 macOS 与 Windows，先把候选产物发布到编译进应用的 origin 下的隔离 canary feed，安装上一 canary 版本，再验证发现、下载、显式安装批准、quiescent shutdown、重启与构建身份。分别测试相同／旧版本、错误 channel、错误应用／平台／架构、缺失产物、损坏字节与无效签名；每种情况都必须保留当前安装可运行。Linux 验证包管理器升级指引，且不显示应用内安装动作。
+把候选产物发布到编译进应用的 origin 下的隔离 canary feed，安装上一 canary 版本，再验证发现、下载、显式安装批准、quiescent shutdown、重启与构建身份。分别测试相同／旧版本、错误 channel、错误应用／平台／架构、缺失产物、损坏字节与无效签名；每种情况都必须保留当前安装可运行。
 
 ## 5. 不可变发布
 

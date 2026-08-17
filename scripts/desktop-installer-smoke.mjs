@@ -22,23 +22,12 @@ const installedDataSmokeScript = join(root, 'scripts', 'desktop-installed-data-s
 const appRequire = createRequire(join(root, 'apps', 'desktop', 'package.json'))
 const electronExecutable = appRequire('electron')
 const temporary = mkdtempSync(join(tmpdir(), 'dsh-desktop-installer-smoke-'))
-const linuxDesktopIcon = '/usr/share/pixmaps/deepseek-harness.png'
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { stdio: 'inherit', ...options })
   if (result.status !== 0) {
     throw new Error(`desktop-installer-smoke: ${command} 失败，exit ${String(result.status)}`)
   }
-}
-
-/**
- * 只读探测平台包管理器中的安装状态。
- * @param {string} command - 要执行的命令。
- * @param {string[]} args - 命令参数。
- * @returns {boolean} 命令是否成功。
- */
-function commandSucceeds(command, args) {
-  return spawnSync(command, args, { stdio: 'ignore' }).status === 0
 }
 
 function findArtifact(suffix) {
@@ -67,11 +56,7 @@ function collectFiles(directory) {
  */
 function runPackagedSmoke(executable, overrides = {}) {
   const product = resolveInstalledProductDirectory(executable)
-  const command = process.platform === 'linux' ? 'xvfb-run' : process.execPath
-  const args = process.platform === 'linux'
-    ? ['-a', process.execPath, smokeScript]
-    : [smokeScript]
-  run(command, args, {
+  run(process.execPath, [smokeScript], {
     cwd: product,
     env: {
       ...process.env,
@@ -109,11 +94,7 @@ function runInitialInstalledSmoke(executable) {
   })
   if (process.env.DSH_DESKTOP_FULL_ACCEPTANCE === '1') {
     runInstalledDataSmoke(executable)
-    const performanceCommand = process.platform === 'linux' ? 'xvfb-run' : process.execPath
-    const performanceArgs = process.platform === 'linux'
-      ? ['-a', process.execPath, performanceSmokeScript]
-      : [performanceSmokeScript]
-    run(performanceCommand, performanceArgs, {
+    run(process.execPath, [performanceSmokeScript], {
       cwd: product,
       env: {
         ...process.env,
@@ -131,11 +112,7 @@ function runInitialInstalledSmoke(executable) {
  */
 function runInstalledDataSmoke(executable) {
   const product = resolveInstalledProductDirectory(executable)
-  const command = process.platform === 'linux' ? 'xvfb-run' : process.execPath
-  const args = process.platform === 'linux'
-    ? ['-a', process.execPath, installedDataSmokeScript]
-    : [installedDataSmokeScript]
-  run(command, args, {
+  run(process.execPath, [installedDataSmokeScript], {
     cwd: product,
     env: {
       ...process.env,
@@ -224,80 +201,9 @@ function smokeWindowsSquirrel() {
   })
 }
 
-function assertLinuxDesktopIntegration() {
-  if (!existsSync('/usr/share/applications/deepseek-harness.desktop')) {
-    throw new Error('desktop-installer-smoke: Linux 安装缺少 desktop entry')
-  }
-  if (!existsSync(linuxDesktopIcon)) {
-    throw new Error('desktop-installer-smoke: Linux 安装缺少应用图标')
-  }
-}
-
-/** 验证 Linux 包卸载后不再保留用户可启动的桌面集成文件。 */
-function assertLinuxDesktopIntegrationRemoved() {
-  if (existsSync('/usr/bin/deepseek-harness')) {
-    throw new Error('desktop-installer-smoke: Linux 卸载后应用可执行文件仍存在')
-  }
-  if (existsSync('/usr/share/applications/deepseek-harness.desktop')) {
-    throw new Error('desktop-installer-smoke: Linux 卸载后 desktop entry 仍存在')
-  }
-  if (existsSync(linuxDesktopIcon)) {
-    throw new Error('desktop-installer-smoke: Linux 卸载后应用图标仍存在')
-  }
-}
-
-/**
- * 用同一个生命周期验证一种 Linux 包格式的卸载与重装。
- * @param {{ install(): void, uninstall(): void }} operations - 对应包管理器的幂等操作。
- * @returns {void}
- */
-function exerciseLinuxPackage(operations) {
-  const executable = '/usr/bin/deepseek-harness'
-  exerciseInstallerLifecycle({
-    install() {
-      operations.install()
-      assertLinuxDesktopIntegration()
-      return executable
-    },
-    smoke: runLifecycleSmoke,
-    uninstall() {
-      operations.uninstall()
-      assertLinuxDesktopIntegrationRemoved()
-    },
-  })
-}
-
-/** 分别验证 deb 与 rpm 的安装、卸载和重装。 */
-function smokeLinuxPackages() {
-  const deb = findArtifact('.deb')
-  exerciseLinuxPackage({
-    install() {
-      run('sudo', ['apt-get', 'install', '-y', deb])
-    },
-    uninstall() {
-      if (commandSucceeds('dpkg-query', ['-W', '-f=${Status}', 'deepseek-harness'])) {
-        run('sudo', ['apt-get', 'remove', '-y', 'deepseek-harness'])
-      }
-    },
-  })
-
-  const rpm = findArtifact('.rpm')
-  exerciseLinuxPackage({
-    install() {
-      run('sudo', ['rpm', '-i', '--nodeps', '--replacepkgs', rpm])
-    },
-    uninstall() {
-      if (commandSucceeds('rpm', ['-q', 'deepseek-harness'])) {
-        run('sudo', ['rpm', '-e', 'deepseek-harness'])
-      }
-    },
-  })
-}
-
 try {
   if (process.platform === 'darwin') smokeMacDmg()
   else if (process.platform === 'win32') smokeWindowsSquirrel()
-  else if (process.platform === 'linux') smokeLinuxPackages()
   else throw new Error(`desktop-installer-smoke: 不支持平台 ${process.platform}`)
 } finally {
   rmSync(temporary, { recursive: true, force: true })

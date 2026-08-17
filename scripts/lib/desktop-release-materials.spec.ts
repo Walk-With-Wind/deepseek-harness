@@ -33,7 +33,7 @@ function setup(): { root: string; staging: string; artifacts: string; output: st
   writeFileSync(join(staging, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-desktop', version: '1.2.3' }))
   writeFileSync(join(staging, 'build-info.json'), JSON.stringify({
     version: '1.2.3', sourceCommit: 'a'.repeat(40), sourceDate: '2026-08-16T00:00:00.000Z', electronVersion: '43.2.0',
-    nodeVersion: '24.0.0', platform: 'linux', arch: 'x64',
+    nodeVersion: '24.0.0', platform: 'darwin', arch: 'x64',
   }))
   writeFileSync(join(staging, 'licenses', 'electron', 'LICENSE'), 'Electron MIT license\n')
   writeFileSync(join(staging, 'licenses', 'electron', 'LICENSES.chromium.html'), '<html>Chromium notices</html>\n')
@@ -49,7 +49,7 @@ function setup(): { root: string; staging: string; artifacts: string; output: st
     }))
     writeFileSync(join(directory, 'LICENSE'), `MIT license for dependency-${String(index)}\n`)
   }
-  writeFileSync(join(artifacts, 'DeepSeek-Harness.deb'), 'installer-bytes')
+  writeFileSync(join(artifacts, 'DeepSeek-Harness.dmg'), 'installer-bytes')
   return { root, staging, artifacts, output }
 }
 
@@ -136,12 +136,12 @@ describe('Desktop release materials', () => {
     expect(notices).toContain('MIT license for dependency-0')
     expect(notices).toContain('Chromium notices')
     expect(notices).not.toContain('未携带独立 LICENSE/NOTICE')
-    expect(readFileSync(join(paths.output, 'SHA256SUMS'), 'utf8')).toMatch(/DeepSeek-Harness\.deb/)
+    expect(readFileSync(join(paths.output, 'SHA256SUMS'), 'utf8')).toMatch(/DeepSeek-Harness\.dmg/)
     await expect(verifyDesktopReleaseMaterials({
       root: paths.root, staging: paths.staging,
       artifactRoot: paths.artifacts, outputRoot: paths.output,
     })).resolves.toBeUndefined()
-    writeFileSync(join(paths.artifacts, 'DeepSeek-Harness.deb'), 'tampered')
+    writeFileSync(join(paths.artifacts, 'DeepSeek-Harness.dmg'), 'tampered')
     await expect(verifyDesktopReleaseMaterials({
       root: paths.root, staging: paths.staging,
       artifactRoot: paths.artifacts, outputRoot: paths.output,

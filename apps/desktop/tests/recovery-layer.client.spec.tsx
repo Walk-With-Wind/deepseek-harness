@@ -48,10 +48,10 @@ describe('Desktop recovery and update presentation', () => {
   })
 
   it.each<DesktopUpdateState>([
-    { phase: 'CHECKING', supported: true, channel: 'canary', currentVersion: '0.1.0-rc.5' },
-    { phase: 'DOWNLOADING', supported: true, channel: 'canary', currentVersion: '0.1.0-rc.5', targetVersion: '0.1.0-rc.6' },
-    { phase: 'READY', supported: true, channel: 'canary', currentVersion: '0.1.0-rc.5', targetVersion: '0.1.0-rc.6' },
-    { phase: 'ERROR', supported: true, channel: 'canary', currentVersion: '0.1.0-rc.5', code: 'UPDATE_CHECK_START_FAILED', message: '暂时无法完成更新检查，请稍后重试。', retryable: true },
+    { phase: 'CHECKING', channel: 'canary', currentVersion: '0.1.0-rc.5' },
+    { phase: 'DOWNLOADING', channel: 'canary', currentVersion: '0.1.0-rc.5', targetVersion: '0.1.0-rc.6' },
+    { phase: 'READY', channel: 'canary', currentVersion: '0.1.0-rc.5', targetVersion: '0.1.0-rc.6' },
+    { phase: 'ERROR', channel: 'canary', currentVersion: '0.1.0-rc.5', code: 'UPDATE_CHECK_START_FAILED', message: '暂时无法完成更新检查，请稍后重试。', retryable: true },
   ])('固定 $phase 更新提示的非阻塞呈现', (updateState) => {
     const view = render(<DesktopStatusLayer hostState={hostState('READY')} updateState={updateState} api={rendererApi().api} />)
     expect(view.container).toMatchSnapshot()
@@ -68,7 +68,7 @@ describe('Desktop recovery and update presentation', () => {
     failed.unmount()
 
     const update = render(<DesktopStatusLayer hostState={hostState('READY')} updateState={{
-      phase: 'READY', supported: true, channel: 'canary', currentVersion: '0.1.0-rc.5', targetVersion: '0.1.0-rc.6',
+      phase: 'READY', channel: 'canary', currentVersion: '0.1.0-rc.5', targetVersion: '0.1.0-rc.6',
     }} api={api} />)
     fireEvent.click(update.getByRole('button', { name: '安装并重启' }))
     await waitFor(() => { expect(invoke).toHaveBeenCalledWith({ type: 'update/install' }) })

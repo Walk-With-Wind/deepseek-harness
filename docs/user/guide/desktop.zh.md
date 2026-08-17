@@ -10,7 +10,6 @@ DeepSeek Harness Desktop 在本机 Electron 应用中运行与 Web UI 相同的 
 
 - **macOS：** 打开 `.dmg`，把 DeepSeek Harness 拖入 Applications，再从 Applications 打开。Apple 芯片（`arm64`）与 Intel（`x64`）分别发布对应构建。
 - **Windows：** 运行 `DeepSeek-Harness-Setup.exe`。首发使用 Squirrel，目标为 `x64` Windows。
-- **Linux：** 使用发行版软件包工具安装 `x64` `.deb` 或 `.rpm`，让依赖处理与卸载继续由该工具管理。
 
 每个版本的发行说明会列出操作系统支持范围。不要使用为其他架构构建的产物替代。
 
@@ -30,7 +29,7 @@ Desktop、`dsh web` 与 CLI 共享 `DSH_HOME`，包括设置、凭据、会话�
 
 macOS 与 Windows Desktop 会对编译进应用的发行通道进行带抖动的低频检查。后台下载不会中断当前工作。有效新版本准备就绪后，选择**安装并重启**；Desktop 会先排空本地 Host，只有达到 quiescent 后才安装。稳定版拒绝预发布元数据，canary 版保持在 canary 通道；相同版本、旧版本、跨通道或错误来源都会被 updater 拒绝。
 
-在 macOS 使用 **DeepSeek Harness → 检查更新…**，在 Windows 使用**应用 → 检查更新…**发起手动检查。Linux 使用已经安装应用的软件包管理器；菜单会打开升级说明或发行页，不会伪装成应用内更新。当平台 updater 无法安全降级时，发行页会保留上一版已签名安装器供人工恢复。
+在 macOS 使用 **DeepSeek Harness → 检查更新…**，在 Windows 使用**应用 → 检查更新…**发起手动检查。当平台 updater 无法安全降级时，发行页会保留上一版已签名安装器供人工恢复。
 
 ## 从启动失败中恢复
 
@@ -49,7 +48,7 @@ Desktop 不提供会静默禁用已安装插件的命令行“安全模式”，
 
 Desktop 在 `<DSH_HOME>/logs/desktop/` 中保留仅属主可读写、按大小限制的日志。日志包含时间戳、应用版本、进程名、稳定生命周期／错误 token、generation、耗时与进程 ID，不记录模型 prompt 或响应、会话正文、凭据、Authorization header、Cookie、环境变量值、工作区内容、插件源码或任意绝对路径。
 
-在 macOS 选择**帮助 → 导出诊断包…**，在 Windows/Linux 选择**应用 → 导出诊断包…**。Desktop 会先展示包含类别和明确排除项，再请求目标位置。分享前请检查 ZIP 内的 `contents.json`、`diagnostic.json` 与白名单 JSONL 文件。诊断包包含构建／版本身份、安全和 fuse 摘要、Desktop 配置值、不可逆标识、更新状态与近期白名单日志，但不包含 `DSH_HOME` 副本。
+在 macOS 选择**帮助 → 导出诊断包…**，在 Windows 选择**应用 → 导出诊断包…**。Desktop 会先展示包含类别和明确排除项，再请求目标位置。分享前请检查 ZIP 内的 `contents.json`、`diagnostic.json` 与白名单 JSONL 文件。诊断包包含构建／版本身份、安全和 fuse 摘要、Desktop 配置值、不可逆标识、更新状态与近期白名单日志，但不包含 `DSH_HOME` 副本。
 
 匿名产品遥测遵循其他 Harness 产品共用的同一设置；Desktop 诊断只保留在本机，并且只在你显式操作后导出。导出诊断 ZIP 不会上传或发送该文件。
 
@@ -57,6 +56,5 @@ Desktop 在 `<DSH_HOME>/logs/desktop/` 中保留仅属主可读写、按大小�
 
 - **macOS：** 退出应用，并将 Applications 中的 DeepSeek Harness 移入废纸篓。
 - **Windows：** 从“已安装的应用”中卸载 DeepSeek Harness。
-- **Linux：** 使用安装时所用的软件包管理器移除 `deepseek-harness`。
 
 卸载应用不会删除共享 `DSH_HOME` 数据，因为 CLI 或 Web UI 可能仍在使用。请先备份需要的会话；只有在所有 Harness 产品都不再需要其中的设置、凭据、工作区、会话或日志时，才单独移除该 home。

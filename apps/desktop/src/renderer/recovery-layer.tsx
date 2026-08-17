@@ -131,7 +131,7 @@ function UpdateNotice({
   readonly api: DesktopRendererApi
 }): React.JSX.Element | null {
   const [busy, setBusy] = useState(false)
-  if (state === undefined || state.phase === 'IDLE' || state.phase === 'UNSUPPORTED') return null
+  if (state === undefined || state.phase === 'IDLE') return null
 
   const invoke = async (action: 'check' | 'install'): Promise<void> => {
     setBusy(true)

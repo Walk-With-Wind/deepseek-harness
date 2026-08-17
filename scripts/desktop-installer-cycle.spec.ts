@@ -24,7 +24,7 @@ async function loadInstallerCycle(): Promise<InstallerCycleModule> {
 }
 
 describe('Desktop installer lifecycle', () => {
-  it('通过 Linux 系统启动链接解析真实应用目录', async () => {
+  it('通过符号链接启动入口解析真实应用目录', async () => {
     const { resolveInstalledProductDirectory } = await loadInstallerCycle()
     const root = mkdtempSync(join(tmpdir(), 'dsh-desktop-installed-product-'))
     const product = join(root, 'usr', 'lib', 'deepseek-harness')

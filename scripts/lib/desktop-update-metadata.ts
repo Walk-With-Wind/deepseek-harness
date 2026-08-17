@@ -4,13 +4,14 @@ import { existsSync } from 'node:fs'
 import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { basename, join, relative, sep } from 'node:path'
 import {
+  assertDesktopReleasePlatform,
   DESKTOP_APPLICATION_ID,
   DESKTOP_UPDATE_ORIGIN,
 } from '../../apps/desktop/src/shared/release-policy.ts'
 
 export interface DesktopUpdateMetadataOptions {
   readonly artifactRoot: string
-  readonly platform: 'darwin' | 'win32' | 'linux'
+  readonly platform: 'darwin' | 'win32'
   readonly arch: 'arm64' | 'x64'
   readonly version: string
   readonly sourceCommit: string
@@ -26,6 +27,7 @@ interface UpdateArtifact {
 
 /** 生成平台 manifest；macOS 额外生成 Squirrel.Mac JSON feed。 */
 export async function generateDesktopUpdateMetadata(options: DesktopUpdateMetadataOptions): Promise<string> {
+  assertDesktopReleasePlatform(options.platform)
   const channel = releaseChannel(options.version)
   if (!/^[a-f0-9]{40}$/.test(options.sourceCommit)) throw new Error('desktop-update: source commit 无效')
   if (!Number.isFinite(Date.parse(options.sourceDate))) throw new Error('desktop-update: source date 无效')
@@ -100,23 +102,17 @@ function selectArtifacts(
     if (zip.length !== 1 || dmg.length !== 1) throw new Error('desktop-update: macOS 必须恰有一个 ZIP 和一个 DMG')
     return [{ path: zip[0]!, role: 'update-zip' }, { path: dmg[0]!, role: 'installer-dmg' }]
   }
-  if (platform === 'win32') {
-    const setup = files.filter(path => /Setup\.exe$/i.test(path))
-    const nupkg = files.filter(path => path.endsWith('.nupkg'))
-    const releases = files.filter(path => basename(path) === 'RELEASES')
-    if (setup.length !== 1 || nupkg.length === 0 || releases.length !== 1) {
-      throw new Error('desktop-update: Windows 必须包含 Setup.exe、nupkg 和 RELEASES')
-    }
-    return [
-      { path: setup[0]!, role: 'installer-exe' },
-      ...nupkg.map(path => ({ path, role: 'update-nupkg' })),
-      { path: releases[0]!, role: 'update-index' },
-    ]
+  const setup = files.filter(path => /Setup\.exe$/i.test(path))
+  const nupkg = files.filter(path => path.endsWith('.nupkg'))
+  const releases = files.filter(path => basename(path) === 'RELEASES')
+  if (setup.length !== 1 || nupkg.length === 0 || releases.length !== 1) {
+    throw new Error('desktop-update: Windows 必须包含 Setup.exe、nupkg 和 RELEASES')
   }
-  const deb = files.filter(path => path.endsWith('.deb'))
-  const rpm = files.filter(path => path.endsWith('.rpm'))
-  if (deb.length !== 1 || rpm.length !== 1) throw new Error('desktop-update: Linux 必须恰有一个 deb 和一个 rpm')
-  return [{ path: deb[0]!, role: 'installer-deb' }, { path: rpm[0]!, role: 'installer-rpm' }]
+  return [
+    { path: setup[0]!, role: 'installer-exe' },
+    ...nupkg.map(path => ({ path, role: 'update-nupkg' })),
+    { path: releases[0]!, role: 'update-index' },
+  ]
 }
 
 async function regularFiles(directory: string): Promise<string[]> {

@@ -34,7 +34,7 @@ function snapshot(): DesktopDiagnosticSnapshot {
     phase: 'READY',
     homeKey: 'b'.repeat(64),
     resource: { resourceCount: 1 },
-    update: { phase: 'IDLE', supported: true, channel: 'stable', currentVersion: '1.2.3' },
+    update: { phase: 'IDLE', channel: 'stable', currentVersion: '1.2.3' },
   }
 }
 

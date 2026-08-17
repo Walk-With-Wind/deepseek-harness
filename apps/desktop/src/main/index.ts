@@ -1,18 +1,20 @@
 /** DeepSeek Harness Desktop Main 进程入口。 */
 import { fileURLToPath } from 'node:url'
-import { Menu, app, powerMonitor, shell } from 'electron'
+import { Menu, app, powerMonitor } from 'electron'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { installDesktopProtocol, registerDesktopScheme } from './protocol-electron.ts'
 import { DesktopMainRuntime } from './runtime.ts'
 import {
-  DESKTOP_RELEASE_PAGE_URL,
   DESKTOP_UPDATE_ORIGIN,
   createElectronUpdateAdapter,
 } from './electron-update-adapter.ts'
 import { DesktopUpdateProvider, desktopUpdateChannel } from './update-provider.ts'
 import { createDesktopMenuTemplate } from './menu.ts'
 import { readDesktopBuildInfo } from './build-info.ts'
-import { DESKTOP_WINDOWS_APP_USER_MODEL_ID } from '../shared/release-policy.ts'
+import {
+  assertDesktopReleasePlatform,
+  DESKTOP_WINDOWS_APP_USER_MODEL_ID,
+} from '../shared/release-policy.ts'
 import { shouldExitForSquirrelStartup } from './squirrel-startup.ts'
 import { readDesktopConfig } from './desktop-config.ts'
 import { requestSystemSessionEnd } from './session-end.ts'
@@ -25,6 +27,7 @@ if (shouldExitForSquirrelStartup(process.platform)) app.quit()
 else startDesktopMain()
 
 function startDesktopMain(): void {
+  assertDesktopReleasePlatform(process.platform)
   registerDesktopScheme()
 
   const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -87,11 +90,9 @@ function startDesktopMain(): void {
     )
     const updateProvider = new DesktopUpdateProvider({
       platform: process.platform,
-      arch: process.arch,
       currentVersion: appVersion,
-      releasePageUrl: DESKTOP_RELEASE_PAGE_URL,
       allowedFeedOrigin: DESKTOP_UPDATE_ORIGIN,
-      ...(nativeUpdater === undefined ? {} : { native: nativeUpdater }),
+      native: nativeUpdater,
     })
     runtime = new DesktopMainRuntime(rendererRoot, updateProvider, desktopConfig, {
       ...(installedExportAcceptancePath === undefined ? {} : { installedExportAcceptancePath }),
@@ -99,10 +100,8 @@ function startDesktopMain(): void {
     })
     Menu.setApplicationMenu(Menu.buildFromTemplate(createDesktopMenuTemplate(
       process.platform,
-      runtime.updatesSupported(),
       {
         checkForUpdates: () => { runtime?.checkForUpdates() },
-        openReleasePage: () => { void shell.openExternal(DESKTOP_RELEASE_PAGE_URL) },
         exportDiagnostics: () => { runtime?.exportDiagnostics() },
       },
     )))

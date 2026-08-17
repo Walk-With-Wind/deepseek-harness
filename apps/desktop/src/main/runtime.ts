@@ -167,11 +167,6 @@ export class DesktopMainRuntime {
     this.updateProvider.check()
   }
 
-  /** 当前平台是否支持 Electron 原生更新。 */
-  updatesSupported(): boolean {
-    return this.updateProvider.state().supported
-  }
-
   /** Electron 的全部窗口关闭事件当前是否代表用户主动退出。 */
   shouldStopForAllWindowsClosed(): boolean {
     return !this.rendererReplacementPending
@@ -784,7 +779,6 @@ export class DesktopMainRuntime {
   }
 
   private armUpdateTimer(initial: boolean): void {
-    if (!this.updateProvider.state().supported) return
     if (this.updateTimer !== undefined) clearTimeout(this.updateTimer)
     const jitter = Math.floor(Math.random() * (this.config.updateCheckJitterMs + 1))
     const delay = initial

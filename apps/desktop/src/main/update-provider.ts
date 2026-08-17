@@ -1,6 +1,7 @@
 /** Desktop 更新状态机；平台 updater 只通过该接缝进入 Main。 */
 import { EventEmitter } from 'node:events'
 import type { DesktopUpdateChannel, DesktopUpdateState } from '../shared/update-protocol.ts'
+import { assertDesktopReleasePlatform } from '../shared/release-policy.ts'
 
 /** 原生 updater 向状态机报告的、已经过平台适配的事件。 */
 export type NativeUpdateEvent =
@@ -24,11 +25,9 @@ export interface NativeUpdateAdapter {
 
 export interface DesktopUpdateProviderOptions {
   readonly platform: NodeJS.Platform
-  readonly arch: string
   readonly currentVersion: string
-  readonly releasePageUrl: string
   readonly allowedFeedOrigin: string
-  readonly native?: NativeUpdateAdapter
+  readonly native: NativeUpdateAdapter
 }
 
 interface ParsedVersion {
@@ -49,19 +48,9 @@ export class DesktopUpdateProvider {
 
   /** @param options - 固定平台、版本、发行源和原生适配器。 */
   constructor(private readonly options: DesktopUpdateProviderOptions) {
+    assertDesktopReleasePlatform(options.platform)
     this.current = parseVersion(options.currentVersion)
     this.channel = this.current.prerelease.length === 0 ? 'stable' : 'canary'
-    if (options.platform !== 'darwin' && options.platform !== 'win32') {
-      this.stateValue = {
-        phase: 'UNSUPPORTED', supported: false, channel: this.channel,
-        currentVersion: options.currentVersion,
-        guidance: '此平台通过系统包管理器或发行页升级，应用不会模拟自动更新。',
-        releasePageUrl: options.releasePageUrl,
-      }
-      this.unsubscribeNative = undefined
-      return
-    }
-    if (options.native === undefined) throw new Error('受支持平台缺少原生更新适配器')
     this.stateValue = this.idleState()
     this.unsubscribeNative = options.native.subscribe((event) => { this.receive(event) })
   }
@@ -80,10 +69,10 @@ export class DesktopUpdateProvider {
 
   /** 用户或低频调度器发起检查；并发检查被拒绝。 */
   check(): boolean {
-    if (this.disposed || !this.stateValue.supported) return false
+    if (this.disposed) return false
     if (this.stateValue.phase !== 'IDLE' && this.stateValue.phase !== 'ERROR') return false
     this.setState({
-      phase: 'CHECKING', supported: true, channel: this.channel,
+      phase: 'CHECKING', channel: this.channel,
       currentVersion: this.options.currentVersion,
     })
     try {
@@ -127,12 +116,12 @@ export class DesktopUpdateProvider {
     if (this.disposed) return
     this.disposed = true
     this.unsubscribeNative?.()
-    this.options.native?.dispose?.()
+    this.options.native.dispose?.()
     this.emitter.removeAllListeners()
   }
 
   private receive(event: NativeUpdateEvent): void {
-    if (this.disposed || !this.stateValue.supported) return
+    if (this.disposed) return
     switch (event.type) {
       case 'checking':
         return
@@ -143,7 +132,7 @@ export class DesktopUpdateProvider {
       case 'available': {
         this.targetVersion = undefined
         this.setState({
-          phase: 'DOWNLOADING', supported: true, channel: this.channel,
+          phase: 'DOWNLOADING', channel: this.channel,
           currentVersion: this.options.currentVersion,
         })
         return
@@ -157,7 +146,7 @@ export class DesktopUpdateProvider {
         }
         this.targetVersion = target.raw
         this.setState({
-          phase: 'READY', supported: true, channel: this.channel,
+          phase: 'READY', channel: this.channel,
           currentVersion: this.options.currentVersion, targetVersion: target.raw,
         })
         return
@@ -191,22 +180,20 @@ export class DesktopUpdateProvider {
 
   private idleState(): DesktopUpdateState {
     return {
-      phase: 'IDLE', supported: true, channel: this.channel,
+      phase: 'IDLE', channel: this.channel,
       currentVersion: this.options.currentVersion,
     }
   }
 
   /** 返回受支持平台在构造阶段已经验证的原生适配器。 */
   private nativeAdapter(): NativeUpdateAdapter {
-    const native = this.options.native
-    if (native === undefined) throw new Error('受支持平台缺少原生更新适配器')
-    return native
+    return this.options.native
   }
 
   private fail(code: string, retryable: boolean): void {
     this.targetVersion = undefined
     this.setState({
-      phase: 'ERROR', supported: true, channel: this.channel,
+      phase: 'ERROR', channel: this.channel,
       currentVersion: this.options.currentVersion,
       code: stableCode(code),
       message: retryable ? '暂时无法完成更新检查，请稍后重试。' : '更新元数据未通过安全校验，当前版本保持不变。',

@@ -15,8 +15,8 @@ describe('Desktop Forge config', () => {
     if (typeof asar !== 'object' || asar === null) throw new Error('测试需要对象形式的 ASAR 配置')
     expect(asar.unpack).toMatch(/dylib/)
     expect(asar.unpack).toMatch(/\.dll/)
-    expect(asar.unpack).toMatch(/\.so/)
-    expect(asar.unpack).toMatch(/landlock-run/)
+    expect(asar.unpack).not.toMatch(/\.so/)
+    expect(asar.unpack).not.toMatch(/landlock-run/)
     expect(config.packagerConfig.prune).toBe(false)
     expect(config.plugins.map(plugin => plugin.name)).toEqual(['auto-unpack-natives'])
     expect(config.hooks.packageAfterCopy).toBeTypeOf('function')
@@ -34,7 +34,7 @@ describe('Desktop Forge config', () => {
     expect(config.rebuildConfig).toEqual({
       force: true,
       types: [],
-      extraModules: ['koffi', 'node-pty', '@deepseek-ai/node-addon-landlock-run'],
+      extraModules: ['koffi', 'node-pty'],
     })
   })
 
@@ -44,8 +44,6 @@ describe('Desktop Forge config', () => {
       { name: 'zip', platforms: ['darwin'] },
       { name: 'dmg', platforms: ['darwin'] },
       { name: 'squirrel', platforms: ['win32'] },
-      { name: 'deb', platforms: ['linux'] },
-      { name: 'rpm', platforms: ['linux'] },
     ])
   })
 
@@ -53,25 +51,16 @@ describe('Desktop Forge config', () => {
     const squirrel = config.makers.find(maker => maker.name === 'squirrel') as unknown as {
       configOrConfigFetcher: { name?: string; authors?: string }
     }
-    const deb = config.makers.find(maker => maker.name === 'deb') as unknown as {
-      configOrConfigFetcher: { options?: { bin?: string; maintainer?: string } }
-    }
-    const rpm = config.makers.find(maker => maker.name === 'rpm') as unknown as {
-      configOrConfigFetcher: { options?: { bin?: string } }
-    }
     const manifest = JSON.parse(readFileSync(resolve(import.meta.dirname, '../package.json'), 'utf8')) as {
       author?: string
       devDependencies?: Record<string, string>
       productName?: string
     }
     expect(squirrel.configOrConfigFetcher).toMatchObject({ name: 'DeepSeekHarness', authors: 'DeepSeek AI' })
-    expect(deb.configOrConfigFetcher.options).toMatchObject({
-      bin: 'deepseek-harness',
-      maintainer: 'DeepSeek AI',
-    })
-    expect(rpm.configOrConfigFetcher.options).toMatchObject({ bin: 'deepseek-harness' })
     expect(manifest).toMatchObject({ author: 'DeepSeek AI', productName: 'DeepSeek Harness' })
-    expect(manifest.devDependencies?.['electron-winstaller']).toBe('5.4.4')
+    expect(manifest.devDependencies).not.toHaveProperty('electron-winstaller')
+    expect(manifest.devDependencies).not.toHaveProperty('@electron-forge/maker-deb')
+    expect(manifest.devDependencies).not.toHaveProperty('@electron-forge/maker-rpm')
   })
 
   it('Windows 签名配置在 PFX 与签名服务之间二选一', () => {

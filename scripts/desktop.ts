@@ -14,6 +14,10 @@ import {
 } from './lib/runtime-staging.ts'
 import { generateDesktopReleaseMaterials } from './lib/desktop-release-materials.ts'
 import { generateDesktopUpdateMetadata } from './lib/desktop-update-metadata.ts'
+import {
+  assertDesktopReleasePlatform,
+  type DesktopReleasePlatform,
+} from '../apps/desktop/src/shared/release-policy.ts'
 
 const root = resolve(import.meta.dirname, '..')
 const appRoot = resolve(root, 'apps/desktop')
@@ -34,8 +38,14 @@ const requiredEntries = [
 ] as const
 
 type DesktopCommand = 'stage' | 'package' | 'make' | 'materials'
+type DesktopReleaseArch = 'arm64' | 'x64'
 
-function parseCommand(argv: string[]): { command: DesktopCommand; arch: string; platform: string } {
+/** 解析 Desktop 发行命令，并在任何 staging 写入前拒绝不受支持的目标。 */
+function parseCommand(argv: string[]): {
+  command: DesktopCommand
+  arch: DesktopReleaseArch
+  platform: DesktopReleasePlatform
+} {
   const { positionals, values } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -50,10 +60,17 @@ function parseCommand(argv: string[]): { command: DesktopCommand; arch: string; 
   }
   if (positionals.length !== 1) throw new Error(`desktop: 未知参数 ${positionals.slice(1).join(' ')}`)
   if (values.arch === '' || values.platform === '') throw new Error('desktop: arch/platform 不得为空')
+  assertDesktopReleasePlatform(values.platform)
+  if (values.arch !== 'arm64' && values.arch !== 'x64') {
+    throw new Error(`desktop: 不支持目标 ${values.platform}-${values.arch}`)
+  }
   return { command, arch: values.arch, platform: values.platform }
 }
 
-async function prepareStaging(platform: string, arch: string): Promise<void> {
+async function prepareStaging(
+  platform: DesktopReleasePlatform,
+  arch: DesktopReleaseArch,
+): Promise<void> {
   await stageProductionClosure({
     root,
     packageName: '@deepseek-ai/dsh-desktop',
@@ -63,10 +80,6 @@ async function prepareStaging(platform: string, arch: string): Promise<void> {
     // WebServer peer 只服务 Web carrier；Desktop 的客户端节点不执行该入口。
     allowedMissingOwnedPeers: ['@deepseek-ai/dsh-host-webserver'],
   })
-  if ((platform !== 'darwin' && platform !== 'linux' && platform !== 'win32')
-    || (arch !== 'arm64' && arch !== 'x64')) {
-    throw new Error(`desktop: 不支持目标 ${platform}-${arch}`)
-  }
   await pruneKnownNativeVariants(staging, platform, arch)
   await ensureKnownNativeExecutableModes(staging, platform, arch)
   const nativeFiles = await verifyNativeRuntimeFiles(staging, platform, arch)
@@ -132,7 +145,11 @@ async function prepareStaging(platform: string, arch: string): Promise<void> {
   )
 }
 
-async function runForge(command: 'package' | 'make', arch: string, platform: string): Promise<void> {
+async function runForge(
+  command: 'package' | 'make',
+  arch: DesktopReleaseArch,
+  platform: DesktopReleasePlatform,
+): Promise<void> {
   if (!existsSync(forgeCli)) throw new Error('desktop: Electron Forge CLI 未安装')
   await new Promise<void>((resolvePromise, reject) => {
     const child = spawn(process.execPath, [forgeCli, command, staging, '--arch', arch, '--platform', platform], {
@@ -149,7 +166,10 @@ async function runForge(command: 'package' | 'make', arch: string, platform: str
   })
 }
 
-async function finalizeReleaseMaterials(platform: string, arch: string): Promise<void> {
+async function finalizeReleaseMaterials(
+  platform: DesktopReleasePlatform,
+  arch: DesktopReleaseArch,
+): Promise<void> {
   const makeRoot = resolve(root, '.artifacts/desktop/out/make')
   const buildInfo = JSON.parse(await readFile(join(staging, 'build-info.json'), 'utf8')) as {
     version?: unknown
@@ -167,8 +187,8 @@ async function finalizeReleaseMaterials(platform: string, arch: string): Promise
   }
   await generateDesktopUpdateMetadata({
     artifactRoot: makeRoot,
-    platform: platform as 'darwin' | 'win32' | 'linux',
-    arch: arch as 'arm64' | 'x64',
+    platform,
+    arch,
     version: buildInfo.version,
     sourceCommit: buildInfo.sourceCommit,
     sourceDate: buildInfo.sourceDate,

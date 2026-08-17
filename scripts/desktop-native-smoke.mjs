@@ -3,7 +3,6 @@ import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { existsSync, readdirSync, realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 const executable = resolve(process.env.DSH_DESKTOP_SMOKE_EXECUTABLE ?? '')
 if (!existsSync(executable)) throw new Error('desktop-native-smoke: 缺少已安装应用可执行文件')
@@ -36,7 +35,7 @@ if (png[0] !== 0x89 || png.subarray(1, 4).toString() !== 'PNG') {
 const koffi = appRequire('koffi')
 const processId = process.platform === 'win32'
   ? koffi.load('kernel32.dll').func('__stdcall', 'GetCurrentProcessId', 'uint32', [])()
-  : koffi.load(process.platform === 'darwin' ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6')
+  : koffi.load('/usr/lib/libSystem.B.dylib')
     .func('getpid', 'int', [])()
 if (processId !== process.pid) throw new Error('desktop-native-smoke: Koffi 原生调用返回错误 PID')
 
@@ -49,18 +48,12 @@ if (rg.status !== 0 || !/^ripgrep /m.test(rg.stdout)) {
 const ptyOutput = await runPty(appRequire('node-pty'))
 if (!ptyOutput.includes('dsh-native-pty')) throw new Error('desktop-native-smoke: PTY 未返回探针文本')
 
-const landlockEntry = appRequire.resolve('@deepseek-ai/node-addon-landlock-run')
-const landlock = await import(pathToFileURL(landlockEntry).href)
-const landlockVerdict = landlock.probe(unpackedPath(landlock.launcherPath()))
-// Ubuntu 22.04 基线可能未启用 Landlock LSM；产物存在性、执行位与架构由 artifact 门禁独立验证。
-
 console.log(JSON.stringify({
   outcome: 'passed',
   loadedAddons,
   sharpBytes: png.byteLength,
   ripgrep: rg.stdout.trim().split(/\r?\n/, 1)[0],
   pty: 'passed',
-  landlock: landlockVerdict,
 }, null, 2))
 
 function collectFiles(directory) {

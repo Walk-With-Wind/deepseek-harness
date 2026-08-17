@@ -2,7 +2,7 @@ import { realpathSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 /**
- * 解析系统启动入口背后的真实应用目录，避免把 Linux 的 `/usr/bin` 链接目录当作产品目录。
+ * 解析启动入口背后的真实应用目录，避免把符号链接目录误当作产品目录。
  * @param {string} executable - 安装器返回的应用启动入口。
  * @returns {string} 最终应用可执行文件所在目录。
  */

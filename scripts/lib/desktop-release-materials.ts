@@ -52,8 +52,6 @@ const LEGAL_ASSETS = {
 const SHARP_LIBVIPS_READMES = {
   '@img/sharp-libvips-darwin-arm64@1.3.2': '47083f1ae7e990f74a56f576bcb8434051cb84ed1982fa57932720869e5147fe',
   '@img/sharp-libvips-darwin-x64@1.3.2': 'bbb84e1fa86b44508e893afe1a84a640cd452c0e671f001256959352bfacb7e5',
-  '@img/sharp-libvips-linux-arm64@1.3.2': 'b05efaa208519f349746a54ee195c433ab8e5c250847a257c984c7a9dc68df20',
-  '@img/sharp-libvips-linux-x64@1.3.2': '4f87b4934d26d52ed65a42e96bfe88e75ac98dbd3bc302b50fe6c07d22e42630',
 } as const
 
 const AUDITED_LEGAL_OVERRIDES = new Map<string, AuditedLegalOverride>([
@@ -63,7 +61,6 @@ const AUDITED_LEGAL_OVERRIDES = new Map<string, AuditedLegalOverride>([
   ['@earendil-works/pi-ai@0.82.1', { license: 'MIT', sources: [LEGAL_ASSETS.mario] }],
   ['@koromix/koffi-darwin-arm64@3.1.1', { license: 'MIT', sources: [LEGAL_ASSETS.niels] }],
   ['@koromix/koffi-darwin-x64@3.1.1', { license: 'MIT', sources: [LEGAL_ASSETS.niels] }],
-  ['@koromix/koffi-linux-x64@3.1.1', { license: 'MIT', sources: [LEGAL_ASSETS.niels] }],
   ['@koromix/koffi-win32-x64@3.1.1', { license: 'MIT', sources: [LEGAL_ASSETS.niels] }],
   ['@nodable/entities@2.2.0', { license: 'MIT', sources: [LEGAL_ASSETS.amit] }],
   ['data-uri-to-buffer@4.0.1', { license: 'MIT', sources: [LEGAL_ASSETS.nathan] }],

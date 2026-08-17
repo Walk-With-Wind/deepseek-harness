@@ -15,16 +15,16 @@ function jobs(): Record<string, Record<string, unknown>> {
   return workflow().jobs as Record<string, Record<string, unknown>>
 }
 
-/** 校验桌面任务覆盖统一的首发平台与原生 runner。 */
+/** 校验桌面任务覆盖统一的发行目标与原生 runner。 */
 function expectDesktopTargetMatrix(job: Record<string, unknown>): void {
   const matrix = (job.strategy as {
     matrix: { include: Array<Record<string, string>> }
   }).matrix.include
   expect(matrix.map(value => `${value.platform}-${value.arch}`)).toEqual([
-    'darwin-arm64', 'darwin-x64', 'win32-x64', 'linux-x64',
+    'darwin-arm64', 'darwin-x64', 'win32-x64',
   ])
   expect(matrix.map(value => value.runner)).toEqual([
-    'macos-15', 'macos-15-intel', 'windows-2022', 'ubuntu-22.04',
+    'macos-15', 'macos-15-intel', 'windows-2022',
   ])
 }
 
@@ -60,7 +60,7 @@ describe('Desktop CI workflow', () => {
     expect(copyLicense).toBeGreaterThan(materialize)
   })
 
-  it('在原生 runner 构建四个首发平台/架构目标', () => {
+  it('在原生 runner 构建三个发行目标', () => {
     for (const name of ['unsigned-native', 'signed-release']) {
       expectDesktopTargetMatrix(jobs()[name]!)
     }
@@ -94,7 +94,7 @@ describe('Desktop CI workflow', () => {
     expect(jobs()['release-matrix-complete']!.needs).toEqual(['signed-release', 'endurance-release'])
   })
 
-  it('在四个首发平台安装签名产物并运行 60 分钟真实进程链耐久门禁', () => {
+  it('在三个发行目标安装签名产物并运行 60 分钟真实进程链耐久门禁', () => {
     const endurance = jobs()['endurance-release']!
     const serialized = JSON.stringify(endurance)
     expect(endurance.needs).toBe('signed-release')
@@ -104,17 +104,15 @@ describe('Desktop CI workflow', () => {
     expect(serialized).toContain('deepseek-harness-${{ matrix.target }}-signed')
     expect(serialized).toContain("runner.os == 'macOS'")
     expect(serialized).toContain("runner.os == 'Windows'")
-    expect(serialized).toContain("runner.os == 'Linux'")
     expect(serialized).toContain('hdiutil attach')
     expect(serialized).toContain('DeepSeek-Harness-Setup.exe')
-    expect(serialized).toContain('apt-get install')
     expect(serialized).toContain('DSH_DESKTOP_INSTALLED_ENDURANCE_ACCEPTANCE')
     expect(serialized).toContain('desktop-installed-data-smoke.mjs')
-    expect(serialized).toContain('xvfb-run')
     expect(serialized).toContain("always() && runner.os == 'macOS'")
     expect(serialized).toContain("always() && runner.os == 'Windows'")
-    expect(serialized).toContain("always() && runner.os == 'Linux'")
-    expect(serialized).toContain('apt-get remove')
+    expect(serialized).not.toContain("runner.os == 'Linux'")
+    expect(serialized).not.toContain('apt-get')
+    expect(serialized).not.toContain('xvfb-run')
     expect(serialized).not.toContain('pnpm run test:desktop:endurance')
 
     const installed = readFileSync(resolve(root, 'scripts/desktop-installed-data-smoke.mjs'), 'utf8')
@@ -205,9 +203,9 @@ describe('Desktop CI workflow', () => {
     expect(installer).toContain("process.env.CI !== 'true'")
     expect(installer).toContain("'hdiutil', ['attach'")
     expect(installer).toContain("setup, ['--silent']")
-    expect(installer).toContain("'apt-get', 'install'")
-    expect(installer).toContain("'rpm', '-i'")
-    expect(installer).toContain("'/usr/share/pixmaps/deepseek-harness.png'")
+    expect(installer).not.toContain("'apt-get', 'install'")
+    expect(installer).not.toContain("'rpm', '-i'")
+    expect(installer).not.toContain("'/usr/share/pixmaps/deepseek-harness.png'")
     expect(installer).toContain("['--uninstall', '-s']")
     expect(installer).toContain('exerciseInstallerLifecycle')
     expect(installer).toContain('runReinstalledSmoke')
@@ -228,8 +226,7 @@ describe('Desktop CI workflow', () => {
     expect(native).toContain("appRequire('koffi')")
     expect(native).toContain("appRequire('@vscode/ripgrep')")
     expect(native).toContain("appRequire('sharp')")
-    expect(native).toContain('landlock.probe(')
-    expect(native).not.toContain("landlockVerdict === 'unusable'")
+    expect(native).not.toContain('landlock')
     expect(installer).not.toContain('dirname(executable)')
     const performance = readFileSync(resolve(root, 'scripts/desktop-performance-smoke.mjs'), 'utf8')
     expect(performance).toContain('const sampleCount = 20')
@@ -248,6 +245,24 @@ describe('Desktop CI workflow', () => {
     expect(packaged).not.toContain('startupMs >')
     expect(packaged).not.toContain('shutdownMs >')
     expect(JSON.stringify(jobs()['signed-release'])).toContain('DSH_DESKTOP_FULL_ACCEPTANCE')
+  })
+
+  it('桌面发行入口不再保留 Linux 安装包实现', () => {
+    const paths = [
+      '.github/workflows/desktop.yml',
+      'apps/desktop/forge.config.ts',
+      'apps/desktop/package.json',
+      'scripts/desktop-installer-smoke.mjs',
+      'scripts/desktop-native-smoke.mjs',
+      'scripts/desktop.ts',
+      'scripts/lib/desktop-release-materials.ts',
+      'scripts/lib/desktop-update-metadata.ts',
+      'scripts/lib/runtime-staging.ts',
+    ]
+    for (const path of paths) {
+      const source = readFileSync(resolve(root, path), 'utf8')
+      expect(source, path).not.toMatch(/\blinux\b|\.deb\b|\.rpm\b|maker-(?:deb|rpm)/i)
+    }
   })
 
   it('在最终安装进程链中发送 100 MiB 附件并执行 RSS 门禁', () => {

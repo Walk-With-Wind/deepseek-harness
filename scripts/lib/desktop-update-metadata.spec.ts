@@ -48,16 +48,28 @@ describe('Desktop update metadata', () => {
 
   it('发现 maker 字节被替换', async () => {
     const artifactRoot = directory()
+    mkdirSync(join(artifactRoot, 'squirrel'))
+    writeFileSync(join(artifactRoot, 'squirrel', 'DeepSeek-Harness-Setup.exe'), 'setup')
+    writeFileSync(join(artifactRoot, 'squirrel', 'DeepSeek-Harness.nupkg'), 'nupkg')
+    writeFileSync(join(artifactRoot, 'squirrel', 'RELEASES'), 'releases')
+    const options = {
+      artifactRoot, platform: 'win32' as const, arch: 'x64' as const,
+      version: '1.2.3', sourceCommit: 'a'.repeat(40), sourceDate: '2026-08-16T00:00:00.000Z',
+    }
+    await generateDesktopUpdateMetadata(options)
+    writeFileSync(join(artifactRoot, 'squirrel', 'DeepSeek-Harness-Setup.exe'), 'tampered')
+    await expect(verifyDesktopUpdateMetadata(options)).rejects.toThrow(/不一致/)
+  })
+
+  it('拒绝为非发行平台生成安装包元数据', async () => {
+    const artifactRoot = directory()
     mkdirSync(join(artifactRoot, 'deb'))
     mkdirSync(join(artifactRoot, 'rpm'))
     writeFileSync(join(artifactRoot, 'deb', 'harness.deb'), 'deb')
     writeFileSync(join(artifactRoot, 'rpm', 'harness.rpm'), 'rpm')
-    const options = {
-      artifactRoot, platform: 'linux' as const, arch: 'x64' as const,
-      version: '1.2.3', sourceCommit: 'a'.repeat(40), sourceDate: '2026-08-16T00:00:00.000Z',
-    }
-    await generateDesktopUpdateMetadata(options)
-    writeFileSync(join(artifactRoot, 'deb', 'harness.deb'), 'tampered')
-    await expect(verifyDesktopUpdateMetadata(options)).rejects.toThrow(/不一致/)
+    await expect(generateDesktopUpdateMetadata({
+      artifactRoot, platform: 'linux' as never, arch: 'x64', version: '1.2.3',
+      sourceCommit: 'a'.repeat(40), sourceDate: '2026-08-16T00:00:00.000Z',
+    })).rejects.toThrow(/不支持/)
   })
 })

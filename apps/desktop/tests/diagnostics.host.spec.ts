@@ -31,7 +31,7 @@ function snapshot(): DesktopDiagnosticSnapshot {
     phase: 'READY',
     homeKey: 'b'.repeat(64),
     resource: { revision: '/Users/private/workspace?token=CANARY_SECRET', resourceCount: 17 },
-    update: { phase: 'IDLE', supported: true, channel: 'stable', currentVersion: '1.2.3' },
+    update: { phase: 'IDLE', channel: 'stable', currentVersion: '1.2.3' },
   }
 }
 

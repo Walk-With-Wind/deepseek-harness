@@ -85,10 +85,6 @@ jobs:
             runner: windows-2022
             platform: win32
             arch: x64
-          - target: linux-x64
-            runner: ubuntu-22.04
-            platform: linux
-            arch: x64
     steps:
       - uses: actions/checkout@v6
         with:
@@ -101,9 +97,6 @@ jobs:
           cache: pnpm
       - name: Assert native runner architecture
         run: node -e "if(process.platform!=='${{ matrix.platform }}'||process.arch!=='${{ matrix.arch }}')throw new Error(process.platform+'-'+process.arch)"
-      - name: Install Linux maker and display dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y fakeroot rpm xvfb
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build:desktop
       - name: Build native installers and release materials
@@ -147,18 +140,14 @@ jobs:
             runner: windows-2022
             platform: win32
             arch: x64
-          - target: linux-x64
-            runner: ubuntu-22.04
-            platform: linux
-            arch: x64
     env:
       NODE_OPTIONS: '--max-old-space-size=5120'
-      DSH_DESKTOP_SIGNING: ${{ matrix.platform == 'linux' && '0' || '1' }}
+      DSH_DESKTOP_SIGNING: '1'
       DSH_MAC_SIGN_IDENTITY: ${{ secrets.DSH_MAC_SIGN_IDENTITY }}
       DSH_APPLE_API_KEY_ID: ${{ secrets.DSH_APPLE_API_KEY_ID }}
       DSH_APPLE_API_ISSUER: ${{ secrets.DSH_APPLE_API_ISSUER }}
       DSH_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.DSH_WINDOWS_CERTIFICATE_PASSWORD }}
-      DSH_DESKTOP_REQUIRE_SIGNING: ${{ matrix.platform == 'linux' && '0' || '1' }}
+      DSH_DESKTOP_REQUIRE_SIGNING: '1'
       DSH_DESKTOP_FULL_ACCEPTANCE: '1'
       DSH_DESKTOP_INSTALLED_EXPORT_ACCEPTANCE: '1'
       DSH_DESKTOP_CIRCUIT_ACCEPTANCE: '1'
@@ -176,9 +165,6 @@ jobs:
           cache: pnpm
       - name: Assert native runner architecture
         run: node -e "if(process.platform!=='${{ matrix.platform }}'||process.arch!=='${{ matrix.arch }}')throw new Error(process.platform+'-'+process.arch)"
-      - name: Install Linux maker and display dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y fakeroot rpm xvfb
       - name: Import protected macOS signing credentials
         if: runner.os == 'macOS'
         env:
@@ -279,10 +265,6 @@ jobs:
             runner: windows-2022
             platform: win32
             arch: x64
-          - target: linux-x64
-            runner: ubuntu-22.04
-            platform: linux
-            arch: x64
     env:
       DSH_DESKTOP_ATTACHMENT_DIAGNOSTIC_BYTES: '1048576'
       DSH_DESKTOP_INSTALLED_ENDURANCE_ACCEPTANCE: '1'
@@ -335,21 +317,8 @@ jobs:
           if ($null -eq $executable) { throw 'Installed Desktop executable not found' }
           "DSH_DESKTOP_SMOKE_EXECUTABLE=$($executable.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
           "DSH_DESKTOP_SMOKE_PRODUCT=$($executable.Directory.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
-      - name: Install signed Linux maker artifact
-        if: runner.os == 'Linux'
-        run: |
-          package="$(find .endurance-artifact -name '*.deb' -print -quit)"
-          test -n "$package"
-          sudo apt-get update
-          sudo apt-get install -y xvfb "$(realpath "$package")"
-          echo 'DSH_DESKTOP_SMOKE_EXECUTABLE=/usr/bin/deepseek-harness' >> "$GITHUB_ENV"
-          echo 'DSH_DESKTOP_SMOKE_PRODUCT=/usr/bin' >> "$GITHUB_ENV"
       - name: Verify installed 60 minute streaming, cancellation and port rotation
-        if: runner.os != 'Linux'
         run: node scripts/desktop-installed-data-smoke.mjs
-      - name: Verify installed 60 minute streaming, cancellation and port rotation on Linux
-        if: runner.os == 'Linux'
-        run: xvfb-run -a node scripts/desktop-installed-data-smoke.mjs
       - name: Remove endurance macOS application
         if: always() && runner.os == 'macOS'
         shell: bash
@@ -364,10 +333,6 @@ jobs:
             Start-Process -FilePath $update -ArgumentList '--uninstall', '-s' -Wait
           }
           Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
-      - name: Uninstall endurance Linux application
-        if: always() && runner.os == 'Linux'
-        run: sudo apt-get remove -y deepseek-harness || true
-
   release-matrix-complete:
     if: always() && github.event_name == 'workflow_dispatch' && inputs.release
     needs: [signed-release, endurance-release]

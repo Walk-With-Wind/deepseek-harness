@@ -4,6 +4,7 @@ import {
   parseRendererCommand,
   parseRendererCommandResult,
 } from '../src/shared/renderer-protocol.ts'
+import { desktopUpdateStateSchema } from '../src/shared/update-protocol.ts'
 
 describe('Desktop Renderer bridge protocol', () => {
   it('只向 Renderer 暴露不含本机路径的启动清单', () => {
@@ -71,6 +72,17 @@ describe('Desktop Renderer bridge protocol', () => {
       operationId: 'export-1',
       outcome: 'saved',
       path: '/tmp/private.zip',
+    })).toThrow()
+  })
+
+  it('更新协议不接受非发行平台的降级状态', () => {
+    expect(() => desktopUpdateStateSchema.parse({
+      phase: 'UNSUPPORTED',
+      supported: false,
+      channel: 'stable',
+      currentVersion: '1.2.3',
+      guidance: '通过系统包管理器升级。',
+      releasePageUrl: 'https://example.com/releases',
     })).toThrow()
   })
 })

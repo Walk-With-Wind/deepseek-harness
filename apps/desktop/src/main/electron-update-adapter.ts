@@ -2,13 +2,12 @@
 import { autoUpdater } from 'electron'
 import type { DesktopUpdateChannel } from '../shared/update-protocol.ts'
 import {
-  DESKTOP_RELEASE_PAGE_URL,
+  assertDesktopReleasePlatform,
   DESKTOP_UPDATE_ORIGIN,
 } from '../shared/release-policy.ts'
 import type { NativeUpdateAdapter, NativeUpdateEvent } from './update-provider.ts'
 
-/** 用户获取安装器与上一版本的公开发行页。 */
-export { DESKTOP_RELEASE_PAGE_URL, DESKTOP_UPDATE_ORIGIN }
+export { DESKTOP_UPDATE_ORIGIN }
 
 interface ElectronUpdaterLike {
   setFeedURL(options: { url: string; serverType?: 'json' | 'default'; allowAnyVersion?: boolean }): void
@@ -24,7 +23,7 @@ export function desktopUpdateFeedUrl(
   arch: string,
   channel: DesktopUpdateChannel,
 ): string {
-  if (platform !== 'darwin' && platform !== 'win32') throw new Error(`平台 ${platform} 不支持应用内更新`)
+  assertDesktopReleasePlatform(platform)
   if (arch !== 'arm64' && arch !== 'x64') throw new Error(`架构 ${arch} 不支持应用内更新`)
   const suffix = platform === 'darwin' ? 'releases.json' : ''
   return `${DESKTOP_UPDATE_ORIGIN}/harness/${channel}/${platform}-${arch}/${suffix}`
@@ -102,8 +101,8 @@ export function createElectronUpdateAdapter(
   platform: NodeJS.Platform,
   arch: string,
   channel: DesktopUpdateChannel,
-): ElectronNativeUpdateAdapter | undefined {
-  if (platform !== 'darwin' && platform !== 'win32') return undefined
+): ElectronNativeUpdateAdapter {
+  assertDesktopReleasePlatform(platform)
   return new ElectronNativeUpdateAdapter(
     autoUpdater,
     desktopUpdateFeedUrl(platform, arch, channel),
