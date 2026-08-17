@@ -4,7 +4,10 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
-import { exerciseInstallerLifecycle } from './desktop-installer-cycle.mjs'
+import {
+  exerciseInstallerLifecycle,
+  resolveInstalledProductDirectory,
+} from './desktop-installer-cycle.mjs'
 
 if (process.env.CI !== 'true') {
   throw new Error('desktop-installer-smoke: 只允许在一次性 CI runner 上安装系统包')
@@ -63,16 +66,17 @@ function collectFiles(directory) {
  * @returns {void}
  */
 function runPackagedSmoke(executable, overrides = {}) {
+  const product = resolveInstalledProductDirectory(executable)
   const command = process.platform === 'linux' ? 'xvfb-run' : process.execPath
   const args = process.platform === 'linux'
     ? ['-a', process.execPath, smokeScript]
     : [smokeScript]
   run(command, args, {
-    cwd: dirname(executable),
+    cwd: product,
     env: {
       ...process.env,
       DSH_DESKTOP_SMOKE_EXECUTABLE: executable,
-      DSH_DESKTOP_SMOKE_PRODUCT: dirname(executable),
+      DSH_DESKTOP_SMOKE_PRODUCT: product,
       ...overrides,
     },
   })
@@ -84,6 +88,7 @@ function runPackagedSmoke(executable, overrides = {}) {
  * @returns {void}
  */
 function runInitialInstalledSmoke(executable) {
+  const product = resolveInstalledProductDirectory(executable)
   runPackagedSmoke(executable, { DSH_DESKTOP_RENDERER_CIRCUIT_ACCEPTANCE: '0' })
   if (process.env.DSH_DESKTOP_RENDERER_CIRCUIT_ACCEPTANCE === '1') {
     runPackagedSmoke(executable, {
@@ -95,7 +100,7 @@ function runInitialInstalledSmoke(executable) {
     })
   }
   run(electronExecutable, [nativeSmokeScript], {
-    cwd: dirname(executable),
+    cwd: product,
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
@@ -125,16 +130,17 @@ function runInitialInstalledSmoke(executable) {
  * @returns {void}
  */
 function runInstalledDataSmoke(executable) {
+  const product = resolveInstalledProductDirectory(executable)
   const command = process.platform === 'linux' ? 'xvfb-run' : process.execPath
   const args = process.platform === 'linux'
     ? ['-a', process.execPath, installedDataSmokeScript]
     : [installedDataSmokeScript]
   run(command, args, {
-    cwd: dirname(executable),
+    cwd: product,
     env: {
       ...process.env,
       DSH_DESKTOP_SMOKE_EXECUTABLE: executable,
-      DSH_DESKTOP_SMOKE_PRODUCT: dirname(executable),
+      DSH_DESKTOP_SMOKE_PRODUCT: product,
     },
   })
 }

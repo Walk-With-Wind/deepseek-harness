@@ -30,6 +30,14 @@ describe('Desktop Forge config', () => {
     expect(desktopFuseConfig[FuseV1Options.WasmTrapHandlers]).toBe(true)
   })
 
+  it('原生重建只遍历明确声明的模块，不扫描完整生产依赖图', () => {
+    expect(config.rebuildConfig).toEqual({
+      force: true,
+      types: [],
+      extraModules: ['koffi', 'node-pty', '@deepseek-ai/node-addon-landlock-run'],
+    })
+  })
+
   it('只为各平台声明首发安装格式', () => {
     const makers = config.makers.map(maker => ({ name: maker.name, platforms: maker.platforms }))
     expect(makers).toEqual([

@@ -135,7 +135,9 @@ const config = {
   },
   rebuildConfig: {
     force: true,
-    onlyModules: ['koffi', 'node-pty', '@deepseek-ai/node-addon-landlock-run'],
+    // Electron Rebuild 的 onlyModules 仍会递归生产依赖图；空 types 配合 extraModules 只遍历明确原生模块。
+    types: [],
+    extraModules: ['koffi', 'node-pty', '@deepseek-ai/node-addon-landlock-run'],
   },
   hooks: {
     packageAfterCopy: async (forgeConfig, buildPath, _electronVersion, platform, arch) => {

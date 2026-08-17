@@ -1,3 +1,15 @@
+import { realpathSync } from 'node:fs'
+import { dirname } from 'node:path'
+
+/**
+ * 解析系统启动入口背后的真实应用目录，避免把 Linux 的 `/usr/bin` 链接目录当作产品目录。
+ * @param {string} executable - 安装器返回的应用启动入口。
+ * @returns {string} 最终应用可执行文件所在目录。
+ */
+export function resolveInstalledProductDirectory(executable) {
+  return dirname(realpathSync(executable))
+}
+
 /**
  * 统一执行最终安装器的首次安装、卸载、重装与最终清理。
  * @template T

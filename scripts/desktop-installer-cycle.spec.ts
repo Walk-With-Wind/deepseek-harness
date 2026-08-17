@@ -1,11 +1,15 @@
-import { existsSync } from 'node:fs'
+import {
+  existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
-import { resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 type InstallerPhase = 'initial' | 'reinstall'
 
 interface InstallerCycleModule {
+  resolveInstalledProductDirectory: (executable: string) => string
   exerciseInstallerLifecycle: <T>(lifecycle: {
     install(phase: InstallerPhase): T
     smoke(installation: T, phase: InstallerPhase): void
@@ -20,6 +24,26 @@ async function loadInstallerCycle(): Promise<InstallerCycleModule> {
 }
 
 describe('Desktop installer lifecycle', () => {
+  it('通过 Linux 系统启动链接解析真实应用目录', async () => {
+    const { resolveInstalledProductDirectory } = await loadInstallerCycle()
+    const root = mkdtempSync(join(tmpdir(), 'dsh-desktop-installed-product-'))
+    const product = join(root, 'usr', 'lib', 'deepseek-harness')
+    const bin = join(root, 'usr', 'bin')
+    const executable = join(product, 'deepseek-harness')
+    const launcher = join(bin, 'deepseek-harness')
+    try {
+      mkdirSync(product, { recursive: true })
+      mkdirSync(bin, { recursive: true })
+      writeFileSync(executable, '')
+      symlinkSync('../lib/deepseek-harness/deepseek-harness', launcher)
+
+      expect(resolveInstalledProductDirectory(launcher)).toBe(dirname(realpathSync(executable)))
+      expect(resolveInstalledProductDirectory(launcher)).not.toBe(dirname(launcher))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('首次验收后卸载，并对重装结果再次运行 smoke', async () => {
     const { exerciseInstallerLifecycle } = await loadInstallerCycle()
     const calls: string[] = []

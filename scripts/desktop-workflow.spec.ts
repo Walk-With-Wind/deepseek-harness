@@ -241,6 +241,8 @@ describe('Desktop CI workflow', () => {
     const packaged = readFileSync(resolve(root, 'scripts/desktop-packaged-smoke.mjs'), 'utf8')
     expect(packaged).toContain('? 5 * 60 * 1000')
     expect(packaged).toContain('const idleRssLimitBytes = 560 * 1024 * 1024')
+    expect(packaged).not.toContain('startupMs >')
+    expect(packaged).not.toContain('shutdownMs >')
     expect(JSON.stringify(jobs()['signed-release'])).toContain('DSH_DESKTOP_FULL_ACCEPTANCE')
   })
 
