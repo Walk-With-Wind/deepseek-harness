@@ -441,6 +441,17 @@ export async function pruneKnownNativeVariants(
     }
   }
 
+  if (platform === 'linux') {
+    // Desktop Linux 以 glibc 为发行基线；移除 Koffi 同包携带且无法在该基线上加载的 musl 变体。
+    await rm(join(
+      staging,
+      'node_modules',
+      '@koromix',
+      `koffi-linux-${arch}`,
+      `musl_${arch}`,
+    ), { recursive: true, force: true })
+  }
+
   const conpty = join(staging, 'node_modules', 'node-pty', 'third_party', 'conpty')
   if (!existsSync(conpty)) return
   if (platform !== 'win32') {

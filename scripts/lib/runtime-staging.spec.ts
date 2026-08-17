@@ -151,6 +151,16 @@ describe('runtime staging', () => {
     await expect(readdir(join(root, 'node_modules', 'node-pty', 'third_party'))).resolves.toEqual([])
   })
 
+  it('Linux glibc 产物删除 Koffi 的 musl 原生变体', async () => {
+    const root = await fixture()
+    const koffi = join(root, 'node_modules', '@koromix', 'koffi-linux-x64')
+    await Promise.all(['linux_x64', 'musl_x64'].map(name => mkdir(join(koffi, name), { recursive: true })))
+
+    await pruneKnownNativeVariants(root, 'linux', 'x64')
+
+    await expect(readdir(koffi)).resolves.toEqual(['linux_x64'])
+  })
+
   it('Windows 只保留目标架构的 node-pty ConPTY 运行库', async () => {
     const root = await fixture()
     const conpty = join(root, 'node_modules', 'node-pty', 'third_party', 'conpty', '1.0.0')
