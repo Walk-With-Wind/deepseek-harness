@@ -1,0 +1,276 @@
+diff --git a/lib/asar.js b/lib/asar.js
+index fd94e84b62e474470f1dee1f7e5e96d66e3723e7..a9a224073e85c8e780f3ce7cc9e1294a3a8fc692 100644
+--- a/lib/asar.js
++++ b/lib/asar.js
+@@ -52,13 +52,16 @@ const crawlfs_1 = require("./crawlfs");
+  */
+ function isUnpackedDir(dirPath, pattern, unpackDirs) {
+     if (dirPath.startsWith(pattern) || (0, minimatch_1.default)(dirPath, pattern)) {
+-        if (!unpackDirs.includes(dirPath)) {
+-            unpackDirs.push(dirPath);
+-        }
++        unpackDirs.add(dirPath);
+         return true;
+     }
+     else {
+-        return unpackDirs.some((unpackDir) => dirPath.startsWith(unpackDir) && !path.relative(unpackDir, dirPath).startsWith('..'));
++        for (const unpackDir of unpackDirs) {
++            if (dirPath.startsWith(unpackDir) && !path.relative(unpackDir, dirPath).startsWith('..')) {
++                return true;
++            }
++        }
++        return false;
+     }
+ }
+ async function createPackage(src, dest) {
+@@ -89,7 +92,7 @@ async function createPackageFromFiles(src, dest, filenames, metadata = {}, optio
+     const filesystem = new filesystem_1.Filesystem(src);
+     const files = [];
+     const links = [];
+-    const unpackDirs = [];
++    const unpackDirs = new Set();
+     let filenamesSorted = [];
+     if (options.ordering) {
+         const orderingFiles = (await wrapped_fs_1.default.readFile(options.ordering))
+@@ -173,15 +176,10 @@ async function createPackageFromFiles(src, dest, filenames, metadata = {}, optio
+         await wrapped_fs_1.default.mkdirp(path.dirname(dest));
+         return disk.writeFilesystem(dest, filesystem, { files, links }, metadata);
+     };
+-    const names = filenamesSorted.slice();
+-    const next = async function (name) {
+-        if (!name) {
+-            return insertsDone();
+-        }
+-        await handleFile(name);
+-        return next(names.shift());
+-    };
+-    return next(names.shift());
++    for (const filename of filenamesSorted) {
++        await handleFile(filename);
++    }
++    return insertsDone();
+ }
+ /**
+  * Create an ASAR archive from a list of streams.
+diff --git a/lib/crawlfs.js b/lib/crawlfs.js
+index bc614aba8e5bd1a59df20d2e4b82287f4d0dd506..691a2d5609027490f264efe9d4628afeb22aa651 100644
+--- a/lib/crawlfs.js
++++ b/lib/crawlfs.js
+@@ -51,28 +51,34 @@ async function crawl(dir, options) {
+     const crawled = await glob(dir, options);
+     const results = await Promise.all(crawled.map(async (filename) => [filename, await determineFileType(filename)]));
+     const links = [];
++    const linkSet = new Set();
+     const filenames = results
+         .map(([filename, type]) => {
+         if (type) {
+             metadata[filename] = type;
+-            if (type.type === 'link')
++            if (type.type === 'link') {
+                 links.push(filename);
++                linkSet.add(filename);
++            }
+         }
+         return filename;
+     })
+         .filter((filename) => {
++        if (links.length === 0)
++            return true;
+         // Newer glob can return files inside symlinked directories, to avoid
+         // those appearing in archives we need to manually exclude theme here
+-        const exactLinkIndex = links.findIndex((link) => filename === link);
+-        return links.every((link, index) => {
+-            if (index === exactLinkIndex) {
+-                return true;
+-            }
++        const isExactLink = linkSet.has(filename);
++        for (const link of links) {
++            if (isExactLink && filename === link)
++                continue;
+             const isFileWithinSymlinkDir = filename.startsWith(link);
+             // symlink may point outside the directory: https://github.com/electron/asar/issues/303
+             const relativePath = path.relative(link, path.dirname(filename));
+-            return !isFileWithinSymlinkDir || relativePath.startsWith('..');
+-        });
++            if (isFileWithinSymlinkDir && !relativePath.startsWith('..'))
++                return false;
++        }
++        return true;
+     });
+     return [filenames, metadata];
+ }
+diff --git a/lib/disk.js b/lib/disk.js
+index 2a477720ef1ae97015829ff7192672433453bfb7..97e1f31f2a62c3d214376c54cca7632be1cfd8fb 100644
+--- a/lib/disk.js
++++ b/lib/disk.js
+@@ -67,25 +67,49 @@ async function streamTransformedFile(stream, outStream) {
+ }
+ const writeFileListToStream = async function (dest, filesystem, out, lists, metadata) {
+     const { files, links } = lists;
++    let pendingBuffers = [];
++    const flushPendingBuffers = async () => {
++        if (pendingBuffers.length === 0) {
++            return;
++        }
++        const combined = pendingBuffers.length === 1 ? pendingBuffers[0] : Buffer.concat(pendingBuffers);
++        pendingBuffers = [];
++        await new Promise((resolve, reject) => {
++            out.write(combined, (error) => error ? reject(error) : resolve());
++        });
++    };
+     for (const file of files) {
+         if (file.unpack) {
++            await flushPendingBuffers();
+             // the file should not be packed into archive
+             const filename = path.relative(filesystem.getRootPath(), file.filename);
+             await copyFile(`${dest}.unpacked`, filesystem.getRootPath(), filename);
+         }
+         else {
+-            const transformed = metadata[file.filename].transformed;
+-            const stream = wrapped_fs_1.default.createReadStream(transformed ? transformed.path : file.filename);
+-            await streamTransformedFile(stream, out);
++            const fileMetadata = metadata[file.filename];
++            if (fileMetadata.cachedBuffer) {
++                pendingBuffers.push(fileMetadata.cachedBuffer);
++                fileMetadata.cachedBuffer = undefined;
++            }
++            else {
++                await flushPendingBuffers();
++                const transformed = fileMetadata.transformed;
++                const stream = wrapped_fs_1.default.createReadStream(transformed ? transformed.path : file.filename);
++                await streamTransformedFile(stream, out);
++            }
+         }
+     }
++    await flushPendingBuffers();
+     for (const file of links.filter((f) => f.unpack)) {
+         // the symlink needs to be recreated outside in .unpacked
+         const filename = path.relative(filesystem.getRootPath(), file.filename);
+         const link = await wrapped_fs_1.default.readlink(file.filename);
+         await createSymlink(dest, filename, link);
+     }
+-    return out.end();
++    return new Promise((resolve, reject) => {
++        out.on('error', reject);
++        out.end(() => resolve());
++    });
+ };
+ async function writeFilesystem(dest, filesystem, lists, metadata) {
+     const out = await createFilesystemWriteStream(filesystem, dest);
+diff --git a/lib/filesystem.js b/lib/filesystem.js
+index 6806832a500aa3938d5d8f6e0320e9b7d94abd6c..cdcd16b15948bf452a14b64c3eaf46ed358624fa 100644
+--- a/lib/filesystem.js
++++ b/lib/filesystem.js
+@@ -34,6 +34,7 @@ const stream = __importStar(require("stream"));
+ const integrity_1 = require("./integrity");
+ const wrapped_fs_1 = __importDefault(require("./wrapped-fs"));
+ const UINT32_MAX = 2 ** 32 - 1;
++const BUFFER_HASH_THRESHOLD = 2 * 1024 * 1024;
+ const pipeline = (0, util_1.promisify)(stream.pipeline);
+ class Filesystem {
+     constructor(src) {
+@@ -127,10 +128,22 @@ class Filesystem {
+         }
+         node.size = size;
+         node.offset = this.offset.toString();
+-        node.integrity = await (0, integrity_1.getFileIntegrity)(streamGenerator());
+         if (process.platform !== 'win32' && file.stat.mode & 0o100) {
+             node.executable = true;
+         }
++        if (!transformed && size <= BUFFER_HASH_THRESHOLD) {
++            try {
++                const fileBuffer = wrapped_fs_1.default.readFileSync(p);
++                node.integrity = (0, integrity_1.getFileIntegrityFromBuffer)(fileBuffer);
++                file.cachedBuffer = fileBuffer;
++                this.offset += BigInt(size);
++                return;
++            }
++            catch {
++                // 同步读取失败时交回既有流式路径，由该路径报告原始文件错误。
++            }
++        }
++        node.integrity = await (0, integrity_1.getFileIntegrity)(streamGenerator());
+         this.offset += BigInt(size);
+     }
+     insertLink(p, shouldUnpack, parentPath = wrapped_fs_1.default.realpathSync(path.dirname(p)), symlink = wrapped_fs_1.default.readlinkSync(p), // /var/tmp => /private/var
+diff --git a/lib/integrity.js b/lib/integrity.js
+index cdcd9602b9c144cd7d5c22ae37f267891eabbb5c..b9454ec1bbbb24d462316794e85568c8dd585844 100644
+--- a/lib/integrity.js
++++ b/lib/integrity.js
+@@ -24,6 +24,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
+ };
+ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.getFileIntegrity = getFileIntegrity;
++exports.getFileIntegrityFromBuffer = getFileIntegrityFromBuffer;
+ const crypto = __importStar(require("crypto"));
+ const stream = __importStar(require("stream"));
+ const util_1 = require("util");
+@@ -31,37 +32,35 @@ const ALGORITHM = 'SHA256';
+ // 4MB default block size
+ const BLOCK_SIZE = 4 * 1024 * 1024;
+ const pipeline = (0, util_1.promisify)(stream.pipeline);
+-function hashBlock(block) {
+-    return crypto.createHash(ALGORITHM).update(block).digest('hex');
+-}
+ async function getFileIntegrity(inputFileStream) {
+     const fileHash = crypto.createHash(ALGORITHM);
+     const blockHashes = [];
++    let blockHash = crypto.createHash(ALGORITHM);
+     let currentBlockSize = 0;
+-    let currentBlock = [];
+     await pipeline(inputFileStream, new stream.PassThrough({
+         decodeStrings: false,
+         transform(_chunk, encoding, callback) {
+             fileHash.update(_chunk);
+-            function handleChunk(chunk) {
+-                const diffToSlice = Math.min(BLOCK_SIZE - currentBlockSize, chunk.byteLength);
+-                currentBlockSize += diffToSlice;
+-                currentBlock.push(chunk.slice(0, diffToSlice));
++            let offset = 0;
++            while (offset < _chunk.byteLength) {
++                const remaining = BLOCK_SIZE - currentBlockSize;
++                const end = Math.min(offset + remaining, _chunk.byteLength);
++                const slice = offset === 0 && end === _chunk.byteLength
++                    ? _chunk
++                    : _chunk.subarray(offset, end);
++                blockHash.update(slice);
++                currentBlockSize += end - offset;
+                 if (currentBlockSize === BLOCK_SIZE) {
+-                    blockHashes.push(hashBlock(Buffer.concat(currentBlock)));
+-                    currentBlock = [];
++                    blockHashes.push(blockHash.digest('hex'));
++                    blockHash = crypto.createHash(ALGORITHM);
+                     currentBlockSize = 0;
+                 }
+-                if (diffToSlice < chunk.byteLength) {
+-                    handleChunk(chunk.slice(diffToSlice));
+-                }
++                offset = end;
+             }
+-            handleChunk(_chunk);
+             callback();
+         },
+         flush(callback) {
+-            blockHashes.push(hashBlock(Buffer.concat(currentBlock)));
+-            currentBlock = [];
++            blockHashes.push(blockHash.digest('hex'));
+             callback();
+         },
+     }));
+@@ -72,4 +71,16 @@ async function getFileIntegrity(inputFileStream) {
+         blocks: blockHashes,
+     };
+ }
++function getFileIntegrityFromBuffer(data) {
++    const hash = crypto.createHash(ALGORITHM).update(data).digest('hex');
++    const blocks = [];
++    for (let offset = 0; offset < data.length; offset += BLOCK_SIZE) {
++        const end = Math.min(offset + BLOCK_SIZE, data.length);
++        blocks.push(crypto.createHash(ALGORITHM).update(data.subarray(offset, end)).digest('hex'));
++    }
++    if (data.length % BLOCK_SIZE === 0) {
++        blocks.push(crypto.createHash(ALGORITHM).digest('hex'));
++    }
++    return { algorithm: ALGORITHM, hash, blockSize: BLOCK_SIZE, blocks };
++}
+ //# sourceMappingURL=integrity.js.map

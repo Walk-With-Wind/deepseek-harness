@@ -44,6 +44,8 @@ pnpm run website:build
 
 人工运行 `Desktop` workflow，并设置 `release=true`。签名矩阵使用原生 `macos-15` arm64、`macos-15-intel` x64 和 `windows-2022` x64 runner。每个 job 都会从冻结 lockfile 安装、重建 Electron 原生依赖、执行 Forge maker、验证 packaged application、安装最终 maker 产物并重新派生发行材料。完整签名矩阵成功后，独立受保护矩阵会在同样的三个原生目标下载并安装每个签名产物，再针对全部安装结果执行 60 分钟 IPC 流式耐久。最终矩阵 job 要求两个阶段都成功，拒绝部分结果。
 
+maker 矩阵为每个目标提供 5,120 MiB Node old-space。实际解析的 `@electron/asar` 3.4.1 包含仓库补丁，采用有界小文件哈希、批量归档写入、迭代式分块哈希与基于集合的路径扫描，使完整 Windows 生产闭包能够使用与 macOS 相同的预算。未签名与签名行必须保持一致，补丁与 lockfile hash 必须同步；内存不足退出会阻断候选版本，不能以缩小且未经验证的闭包绕过。
+
 在匹配平台与架构上进行本机未签名调查时运行：
 
 ```sh

@@ -14,6 +14,13 @@ export interface NativeRuntimeFile {
   readonly architectures: readonly ('x64' | 'arm64')[]
 }
 
+/** staging 目录树的可审计规模。 */
+export interface DirectoryTreeSummary {
+  readonly directories: number
+  readonly files: number
+  readonly bytes: number
+}
+
 /** production closure 的可注入部署选项。 */
 export interface RuntimeStagingOptions {
   readonly root: string
@@ -220,6 +227,29 @@ async function findSymlink(directory: string): Promise<string | undefined> {
 export async function verifySymlinkFree(staging: string): Promise<void> {
   const link = await findSymlink(staging)
   if (link !== undefined) throw new Error(`runtime-staging: 产物闭包残留符号链接 ${relative(staging, link)}`)
+}
+
+/**
+ * 汇总目录树的文件数、子目录数与文件实际长度。
+ * @param root - 待统计的目录根。
+ * @returns 不含根目录自身的规模汇总。
+ */
+export async function summarizeDirectoryTree(root: string): Promise<DirectoryTreeSummary> {
+  const summary = { directories: 0, files: 0, bytes: 0 }
+  const visit = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        summary.directories += 1
+        await visit(path)
+      } else if (entry.isFile()) {
+        summary.files += 1
+        summary.bytes += (await lstat(path)).size
+      }
+    }
+  }
+  await visit(root)
+  return summary
 }
 
 /**

@@ -64,7 +64,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
-      NODE_OPTIONS: '--max-old-space-size=5120'
+      NODE_OPTIONS: ${{ matrix.nodeOptions }}
       DSH_DESKTOP_FAULT_ACCEPTANCE: '1'
       DSH_DESKTOP_CIRCUIT_ACCEPTANCE: '1'
       DSH_DESKTOP_RENDERER_CIRCUIT_ACCEPTANCE: '1'
@@ -77,14 +77,17 @@ jobs:
             runner: macos-15
             platform: darwin
             arch: arm64
+            nodeOptions: '--max-old-space-size=5120'
           - target: macos-x64
             runner: macos-15-intel
             platform: darwin
             arch: x64
+            nodeOptions: '--max-old-space-size=5120'
           - target: windows-x64
             runner: windows-2022
             platform: win32
             arch: x64
+            nodeOptions: '--max-old-space-size=5120'
     steps:
       - uses: actions/checkout@v6
         with:
@@ -132,16 +135,19 @@ jobs:
             runner: macos-15
             platform: darwin
             arch: arm64
+            nodeOptions: '--max-old-space-size=5120'
           - target: macos-x64
             runner: macos-15-intel
             platform: darwin
             arch: x64
+            nodeOptions: '--max-old-space-size=5120'
           - target: windows-x64
             runner: windows-2022
             platform: win32
             arch: x64
+            nodeOptions: '--max-old-space-size=5120'
     env:
-      NODE_OPTIONS: '--max-old-space-size=5120'
+      NODE_OPTIONS: ${{ matrix.nodeOptions }}
       DSH_DESKTOP_SIGNING: '1'
       DSH_MAC_SIGN_IDENTITY: ${{ secrets.DSH_MAC_SIGN_IDENTITY }}
       DSH_APPLE_API_KEY_ID: ${{ secrets.DSH_APPLE_API_KEY_ID }}

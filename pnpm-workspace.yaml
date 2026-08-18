@@ -76,4 +76,5 @@ minimumReleaseAgeExclude:
   - node-addon-require-builtin@0.1.4
 
 patchedDependencies:
+  '@electron/asar@3.4.1': patches/@electron__asar@3.4.1.patch
   node-pty@1.1.0: patches/node-pty@1.1.0.patch

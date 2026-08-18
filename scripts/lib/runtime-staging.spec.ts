@@ -9,6 +9,7 @@ import {
   materializeStagedLinks,
   pruneKnownNativeVariants,
   resolvePnpmInvocation,
+  summarizeDirectoryTree,
   verifyJavaScriptRuntimeClosure,
   verifyNativeRuntimeFiles,
   verifyOwnedPeerClosure,
@@ -28,6 +29,19 @@ async function fixture(): Promise<string> {
 }
 
 describe('runtime staging', () => {
+  it('统计 staging 的文件、目录与实际字节数', async () => {
+    const root = await fixture()
+    await mkdir(join(root, 'nested'), { recursive: true })
+    await writeFile(join(root, 'root.txt'), '1234')
+    await writeFile(join(root, 'nested', 'child.txt'), '123456')
+
+    await expect(summarizeDirectoryTree(root)).resolves.toEqual({
+      directories: 1,
+      files: 2,
+      bytes: 10,
+    })
+  })
+
   it('通过 pnpm JavaScript 入口执行部署以兼容 Windows Node 24', () => {
     expect(resolvePnpmInvocation(['--filter', '@deepseek-ai/dsh-desktop', 'deploy'], {
       npm_execpath: 'C:\\pnpm\\pnpm.cjs',

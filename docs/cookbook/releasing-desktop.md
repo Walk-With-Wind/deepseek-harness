@@ -44,6 +44,8 @@ Confirm the source commit, release notes, application version, and `dsh-v<versio
 
 Run the `Desktop` workflow manually with `release=true`. Its signed matrix uses native `macos-15` arm64, `macos-15-intel` x64, and `windows-2022` x64 runners. Each job installs from the frozen lockfile, rebuilds Electron native dependencies, runs Forge makers, verifies the packaged application, installs the final maker output, and re-derives release materials. After the full signed matrix succeeds, a separate protected matrix downloads and installs each signed artifact on the same three native targets, then runs the 60-minute streaming IPC endurance gate against every installation. The final matrix job requires both stages to pass and rejects a partial result.
 
+The maker matrix supplies a 5,120 MiB Node old-space budget to every target. The resolved `@electron/asar` 3.4.1 package carries the repository patch that uses bounded small-file hashing, batched archive writes, iterative block hashing, and set-based path scans; this keeps the complete Windows production closure within the same budget as macOS. Keep unsigned and signed rows identical, keep the patch and lockfile hash synchronized, and treat an out-of-memory exit as a candidate blocker instead of permitting a smaller unverified closure.
+
 For a local unsigned investigation on the matching platform and architecture:
 
 ```sh

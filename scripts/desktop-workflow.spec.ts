@@ -194,12 +194,23 @@ describe('Desktop CI workflow', () => {
     expect(JSON.stringify(jobs()['signed-release'])).toContain('DSH_DESKTOP_CRASH_RESTART_ACCEPTANCE')
   })
 
+  it('为每个 Forge 打包目标分配有界的 Node 堆预算', () => {
+    for (const name of ['unsigned-native', 'signed-release']) {
+      const job = jobs()[name]!
+      const matrix = (job.strategy as {
+        matrix: { include: Array<Record<string, string>> }
+      }).matrix.include
+      expect(matrix.map(value => `${value.platform}-${value.arch}:${value.nodeOptions}`)).toEqual([
+        'darwin-arm64:--max-old-space-size=5120',
+        'darwin-x64:--max-old-space-size=5120',
+        'win32-x64:--max-old-space-size=5120',
+      ])
+      expect((job.env as Record<string, string>).NODE_OPTIONS).toBe('${{ matrix.nodeOptions }}')
+    }
+  })
+
   it('最终 maker 产物按平台安装、运行、卸载、重装并再次运行', () => {
     const installer = readFileSync(resolve(root, 'scripts/desktop-installer-smoke.mjs'), 'utf8')
-    for (const name of ['unsigned-native', 'signed-release']) {
-      expect((jobs()[name]!.env as Record<string, string>).NODE_OPTIONS)
-        .toBe('--max-old-space-size=5120')
-    }
     expect(installer).toContain("process.env.CI !== 'true'")
     expect(installer).toContain("'hdiutil', ['attach'")
     expect(installer).toContain("setup, ['--silent']")

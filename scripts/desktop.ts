@@ -10,6 +10,7 @@ import {
   ensureKnownNativeExecutableModes,
   pruneKnownNativeVariants,
   stageProductionClosure,
+  summarizeDirectoryTree,
   verifyNativeRuntimeFiles,
 } from './lib/runtime-staging.ts'
 import { generateDesktopReleaseMaterials } from './lib/desktop-release-materials.ts'
@@ -143,6 +144,8 @@ async function prepareStaging(
     join(staging, 'forge.config.ts'),
     `export { default } from ${JSON.stringify(pathToFileURL(forgeConfig).href)}\n`,
   )
+  const summary = await summarizeDirectoryTree(staging)
+  console.log(`desktop: staging ${summary.files} files, ${summary.directories} directories, ${summary.bytes} bytes`)
 }
 
 async function runForge(
