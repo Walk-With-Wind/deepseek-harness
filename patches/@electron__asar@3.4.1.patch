@@ -2,8 +2,15 @@ diff --git a/lib/asar.js b/lib/asar.js
 index fd94e84b62e474470f1dee1f7e5e96d66e3723e7..a9a224073e85c8e780f3ce7cc9e1294a3a8fc692 100644
 --- a/lib/asar.js
 +++ b/lib/asar.js
-@@ -52,13 +52,16 @@ const crawlfs_1 = require("./crawlfs");
+@@ -52,13 +52,23 @@ const crawlfs_1 = require("./crawlfs");
   */
++// 仅在受控 CI 诊断运行中输出阶段内存，正式修复前用于定位 Windows 保留点。
++function reportMemory(label) {
++    if (process.env.DSH_ASAR_MEMORY_DIAGNOSTICS !== '1')
++        return;
++    const memory = process.memoryUsage();
++    console.log(`asar-memory: ${label} heap=${memory.heapUsed} rss=${memory.rss} external=${memory.external}`);
++}
  function isUnpackedDir(dirPath, pattern, unpackDirs) {
      if (dirPath.startsWith(pattern) || (0, minimatch_1.default)(dirPath, pattern)) {
 -        if (!unpackDirs.includes(dirPath)) {
@@ -32,7 +39,7 @@ index fd94e84b62e474470f1dee1f7e5e96d66e3723e7..a9a224073e85c8e780f3ce7cc9e1294a
      let filenamesSorted = [];
      if (options.ordering) {
          const orderingFiles = (await wrapped_fs_1.default.readFile(options.ordering))
-@@ -173,15 +176,10 @@ async function createPackageFromFiles(src, dest, filenames, metadata = {}, optio
+@@ -173,15 +183,15 @@ async function createPackageFromFiles(src, dest, filenames, metadata = {}, optio
          await wrapped_fs_1.default.mkdirp(path.dirname(dest));
          return disk.writeFilesystem(dest, filesystem, { files, links }, metadata);
      };
@@ -45,9 +52,14 @@ index fd94e84b62e474470f1dee1f7e5e96d66e3723e7..a9a224073e85c8e780f3ce7cc9e1294a
 -        return next(names.shift());
 -    };
 -    return next(names.shift());
++    let processed = 0;
 +    for (const filename of filenamesSorted) {
 +        await handleFile(filename);
++        processed += 1;
++        if (processed % 2000 === 0)
++            reportMemory(`inserted=${processed} files=${files.length}`);
 +    }
++    reportMemory(`inserts-done=${processed} files=${files.length}`);
 +    return insertsDone();
  }
  /**
