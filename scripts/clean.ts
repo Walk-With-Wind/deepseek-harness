@@ -80,9 +80,8 @@ export class RepositoryCleaner {
       canonicalRoot,
     )
 
-    // The root project-reference graph is the source of truth for live build targets.
-    // Each emitting project declares lib/types as outDir; its parent lib also owns
-    // the sibling runtime bundles, so the complete build output root is removed.
+    // 根项目引用图是存活构建目标的唯一来源；types-* 表示同一 lib 下隔离的编译面。
+    // 清理其父级 lib，才能同时移除声明输出、运行时 bundle 和增量状态。
     for (const outputDirectory of this.buildOutputDirectories()) {
       await this.addIfPresent(targets, outputDirectory, canonicalRoot)
     }
@@ -133,13 +132,14 @@ export class RepositoryCleaner {
       const parsed = parseConfig(configPath)
       if (parsed.options.outDir !== undefined) {
         const typesDirectory = resolve(parsed.options.outDir)
-        const outputDirectory = basename(typesDirectory) === 'types'
+        const typesDirectoryName = basename(typesDirectory)
+        const outputDirectory = /^types(?:-[a-z0-9]+)*$/.test(typesDirectoryName)
           ? dirname(typesDirectory)
           : typesDirectory === nativeEntryOutput
             ? typesDirectory
             : undefined
         if (outputDirectory === undefined) {
-          throw new Error(`clean: expected TypeScript outDir to end in /types: ${repositoryPath(this.root, typesDirectory)}`)
+          throw new Error(`clean: expected TypeScript outDir to end in /types or /types-<face>: ${repositoryPath(this.root, typesDirectory)}`)
         }
         this.assertRepositoryTarget(outputDirectory)
         outputs.add(outputDirectory)

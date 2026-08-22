@@ -15,8 +15,7 @@
     "dsh": "lib/bin.js"
   },
   "files": [
-    "lib/*.js",
-    "config"
+    "lib/*.js"
   ],
   "license": "MIT",
   "dependencies": {
@@ -36,6 +35,7 @@
     "@deepseek-ai/dsh-compaction-tool-result-pruner": "workspace:^",
     "@deepseek-ai/dsh-goal": "workspace:^",
     "@deepseek-ai/dsh-goal-round-driver": "workspace:^",
+    "@deepseek-ai/dsh-gui-app": "workspace:^",
     "@deepseek-ai/dsh-cmdline": "workspace:^",
     "@deepseek-ai/dsh-launch-environment": "workspace:^",
     "@deepseek-ai/dsh-fs-local": "workspace:^",

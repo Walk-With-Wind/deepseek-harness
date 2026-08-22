@@ -3,7 +3,7 @@
  * connection handle, stream-loop sink wiring into the object layer, and the
  * fiber-scoped loop teardown.
  */
-import { Context } from '@deepseek-ai/cordis'
+import { Context, FiberState } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-api-remotes/client'
 import type { ConnectionSinks } from '@deepseek-ai/dsh-api-remotes/client'
@@ -55,6 +55,37 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('runtime client apply', () => {
+  it('does not report the runtime active before its slot service is available', async () => {
+    const ctx = new Context()
+    await ctx.plugin(TypertRegistry)
+    const api = new FakeApiClient()
+    const handle: ConnectionHandle = {
+      api,
+      isLoopback: true,
+      hostDescription: {
+        getSnapshot: () => undefined,
+        subscribe: () => () => {},
+      },
+      rpc: { call: () => Promise.reject(new Error('unexpected generic RPC call')) },
+      start: () => ({ stop: () => {} }),
+    }
+    ctx.reflect.provide('connection', handle)
+    ctx.reflect.provide('remote', {})
+    ctx.reflect.provide('remote.commands', fakeRemote().commands)
+    const activationSnapshots: boolean[] = []
+    ctx.on('internal/status', (fiber) => {
+      if (fiber.runtime?.callback === RuntimeClient.apply && fiber.state === FiberState.ACTIVE) {
+        // 启动图会在父 Fiber 激活后立即审计依赖，届时 slots 必须已经可见。
+        activationSnapshots.push(ctx.get('slots') !== undefined)
+      }
+    })
+
+    await ctx.plugin(RuntimeClient).await()
+
+    expect(activationSnapshots).toEqual([true])
+    await ctx.fiber.dispose()
+  })
+
   it('mounts slots, Sessions, and Workspaces and fans host frames into both managers', async () => {
     const bench = await mount()
     expect(bench.ctx.get('slots') !== undefined).toBe(true)

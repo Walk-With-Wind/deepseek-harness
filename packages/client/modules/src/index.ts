@@ -22,22 +22,30 @@
  */
 
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
-import type { IncomingMessage, ServerResponse } from 'node:http'
+import { readFileSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
-import type {} from '@deepseek-ai/dsh-host-webserver'
 import { optionalStringArray, stripClientSuffix } from './client/manifest.ts'
 import type { WebBootEntry, WebBootGraph } from './client/manifest.ts'
+import {
+  CLIENT_RESOURCE_MANIFEST_VERSION,
+  type ClientResourceManifest,
+} from './resource-manifest.ts'
 
 export { stripClientSuffix } from './client/manifest.ts'
 export type {
   BootManifest, BootModuleRow, BootPluginRow, WebBootEntry, WebBootGraph,
 } from './client/manifest.ts'
+export {
+  CLIENT_RESOURCE_MANIFEST_VERSION,
+  clientResourceManifestSchema,
+  parseClientResourceManifest,
+  type ClientResourceEntry,
+  type ClientResourceManifest,
+} from './resource-manifest.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -73,6 +81,7 @@ interface WebBootRowFields {
 /** Resolved package metadata for one `dsh.client` package (cached per name, never expires). */
 interface PkgMeta extends WebBootRowFields {
   clientPath: string
+  packageRoot: string
 }
 
 /** Recovery instruction shared by grouped startup and steady-state bundle diagnostics. */
@@ -286,14 +295,14 @@ window.__ModuleLoader__={
 }
 
 /**
- * The web plugin table service: incremental `dsh.client` scan + wire composition
- * + bundle route + index tap. Construction runs the activation scan
+ * The GUI client-module registry: incremental `dsh.client` scan, boot-graph
+ * composition, and trusted resource-manifest projection. Construction runs the activation scan
  * synchronously — a malformed declaration or missing bundle among the
  * already-loaded entries aggregates into one loud throw (FAILED fiber; the
  * boot activation audit reports it).
  */
 export class ClientModuleRegistry extends Service {
-  static inject = ['webServer', 'loader']
+  static inject = ['loader']
 
   private readonly table = new Map<string, WebPluginRecord>()
   // Negative verdicts (unresolvable specifier — builtins like cordis:include,
@@ -305,11 +314,12 @@ export class ClientModuleRegistry extends Service {
   private readonly dirty = new Set<string>()
   private readonly resolvePkgJson: (spec: string) => string
   private flushQueued = false
+  private firstSnapshotPending = true
   private composed: WebBootGraph
 
   /**
    * Build the service: subscribe, seed, and run the activation flush.
-   * @param ctx - plugin context carrying webServer and loader.
+   * @param ctx - Plugin context carrying the Loader.
    */
   constructor(ctx: Context) {
     super(ctx, 'clientModules')
@@ -320,8 +330,21 @@ export class ClientModuleRegistry extends Service {
     if (ctx.baseUrl === undefined) {
       throw new Error('client-modules: ctx.baseUrl is unset — the node half needs the config-tree anchor to resolve plugin packages')
     }
-    const require = createRequire(ctx.baseUrl)
-    this.resolvePkgJson = spec => require.resolve(`${spec}/package.json`)
+    const profileRequire = createRequire(ctx.baseUrl)
+    const hostModuleBaseUrl = ctx.get('hostModuleBaseUrl') as string | undefined
+    if (hostModuleBaseUrl === undefined) {
+      this.resolvePkgJson = spec => profileRequire.resolve(`${spec}/package.json`)
+    } else {
+      const hostRequire = createRequire(hostModuleBaseUrl)
+      this.resolvePkgJson = (spec) => {
+        try {
+          return hostRequire.resolve(`${spec}/package.json`)
+        } catch (error) {
+          if (!isModuleNotFound(error)) throw error
+          return profileRequire.resolve(`${spec}/package.json`)
+        }
+      }
+    }
 
     // Subscribe before seeding so a fiber arriving mid-activation lands in the
     // same dirty set (Set idempotence makes the overlap harmless). An entry-less
@@ -343,27 +366,16 @@ export class ClientModuleRegistry extends Service {
     // seed, and flush).
     for (const entry of ctx.loader.entries()) this.dirty.add(entry.options.name)
     this.composed = this.compose()
-    const failures: Error[] = []
-    this.flush(err => failures.push(err))
-    if (failures.length > 0) {
-      throw new ClientPackageCompositionError(failures)
-    }
+    this.flushPending()
 
-    ctx.effect(
-      () => ctx.webServer.register({ kind: 'prefix', path: '/plugins', handler: this.serveBundle }),
-      'client-modules: bundle route',
-    )
-    ctx.effect(
-      () => ctx.webServer.tapIndex(html => injectBootManifest(html, this.composed)),
-      'client-modules: boot manifest injection',
-    )
   }
 
   /**
-   * Current composed entry graph (stable object between changes).
-   * @returns the graph served as `window.__DSH_BOOT__`.
+   * Return the current composed entry graph, stable between changes.
+   * @returns The graph passed to the GUI product shell.
    */
   graph(): WebBootGraph {
+    this.settleSnapshot()
     return this.composed
   }
 
@@ -374,6 +386,25 @@ export class ClientModuleRegistry extends Service {
    */
   clientPath(id: string): string | undefined {
     return this.table.get(id)?.meta.clientPath
+  }
+
+  /**
+   * Project the read-only resource map sent to Desktop Main; Renderer receives only opaque URLs from {@link graph}.
+   * @returns Trusted bundle paths for the current graph generation.
+   */
+  resourceManifest(): ClientResourceManifest {
+    this.settleSnapshot()
+    return Object.freeze({
+      version: CLIENT_RESOURCE_MANIFEST_VERSION,
+      rev: this.composed.rev,
+      resources: Object.freeze([...this.table.entries()].map(([id, record]) => Object.freeze({
+        id,
+        rev: record.entry.rev,
+        urlPath: `/plugins/${id}/client.js`,
+        sourcePath: record.meta.clientPath,
+        sourceMapPath: `${record.meta.clientPath}.map`,
+      }))),
+    })
   }
 
   /**
@@ -466,8 +497,15 @@ export class ClientModuleRegistry extends Service {
     if (clientRel === undefined) {
       throw new Error(`client-modules: ${pkgName} declares dsh.client but exports no "./client" bundle`)
     }
+    if (!clientRel.startsWith('./')) {
+      throw new Error(`client-modules: ${pkgName} exports["./client"] must be package-relative`)
+    }
+    const packageRoot = realpathSync(dirname(pkgPath))
+    const clientPath = resolve(packageRoot, clientRel)
+    assertOwnedPath(pkgName, packageRoot, clientPath)
     const meta: PkgMeta = {
-      clientPath: join(dirname(pkgPath), clientRel),
+      clientPath,
+      packageRoot,
       ...(decl.inject !== undefined ? { inject: decl.inject } : {}),
       external: decl.external ?? [],
       immediately: decl.immediately === true,
@@ -483,9 +521,15 @@ export class ClientModuleRegistry extends Service {
    * @returns the bundle content's short hash for use as its revision.
    * @throws {MissingClientBundleError} when the read fails with `ENOENT`; other filesystem errors are rethrown unchanged.
    */
-  private initialBundleRevision(pkgName: string, clientPath: string): string {
+  private initialBundle(
+    pkgName: string,
+    packageRoot: string,
+    clientPath: string,
+  ): { readonly path: string; readonly rev: string } {
     try {
-      return shortHash(readFileSync(clientPath))
+      const path = realpathSync(clientPath)
+      assertOwnedPath(pkgName, packageRoot, path)
+      return { path, rev: shortHash(readFileSync(path)) }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       throw new MissingClientBundleError(pkgName, clientPath, error)
@@ -507,8 +551,9 @@ export class ClientModuleRegistry extends Service {
     if (meta === null) return false
     // The rev rides the row from here on: a fiber restart reuses the row (and
     // its rev) untouched; only rebuilt() re-reads the bundle.
-    const rev = this.initialBundleRevision(entryName, meta.clientPath)
-    this.table.set(entryName, { entry: graphRow(entryName, rev, meta), meta })
+    const bundle = this.initialBundle(entryName, meta.packageRoot, meta.clientPath)
+    const resolvedMeta = { ...meta, clientPath: bundle.path }
+    this.table.set(entryName, { entry: graphRow(entryName, bundle.rev, resolvedMeta), meta: resolvedMeta })
     return true
   }
 
@@ -540,43 +585,35 @@ export class ClientModuleRegistry extends Service {
     this.notifyGraphChanged()
   }
 
-  private readonly serveBundle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405)
-      res.end()
-      return
-    }
-    /* v8 ignore next -- `?? '/'` arm: node:http always sets url on server requests. */
-    const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname)
-    // The id may contain a scope slash. Anything else under /plugins (including
-    // /plugins/events when the HMR row is absent) is an unknown resource.
-    const prefix = '/plugins/'
-    const mapSuffix = '/client.js.map'
-    const bundleSuffix = '/client.js'
-    const isSourceMap = pathname.startsWith(prefix) && pathname.endsWith(mapSuffix)
-    const suffix = isSourceMap ? mapSuffix : bundleSuffix
-    const clientPath = pathname.startsWith(prefix) && pathname.endsWith(suffix)
-      ? this.clientPath(pathname.slice(prefix.length, -suffix.length))
-      : undefined
-    const path = clientPath === undefined ? undefined : `${clientPath}${isSourceMap ? '.map' : ''}`
-    if (path === undefined) {
-      res.writeHead(404)
-      res.end()
-      return
-    }
-    try {
-      const body = await readFile(path)
-      res.writeHead(200, {
-        'content-type': isSourceMap ? 'application/json; charset=utf-8' : 'text/javascript; charset=utf-8',
-        'cache-control': 'no-cache',
-      })
-      res.end(body)
-    } catch {
-      // Registered but unreadable (bundle not built yet): loud 404 beats a silent SPA-fallback HTML page.
-      res.writeHead(404)
-      res.end()
-    }
+  /** Settle pending entries synchronously so first-read composition errors remain boot failures. */
+  private flushPending(): void {
+    if (this.dirty.size === 0) return
+    const failures: Error[] = []
+    this.flush(error => failures.push(error))
+    if (failures.length > 0) throw new ClientPackageCompositionError(failures)
   }
+
+  /** Rescan the settled Loader before the first public read, then process only incremental marks. */
+  private settleSnapshot(): void {
+    if (this.firstSnapshotPending) {
+      this.firstSnapshotPending = false
+      for (const entry of this.ctx.loader.entries()) this.dirty.add(entry.options.name)
+      for (const name of this.table.keys()) this.dirty.add(name)
+    }
+    this.flushPending()
+  }
+
+}
+
+function assertOwnedPath(packageName: string, packageRoot: string, candidate: string): void {
+  const child = relative(packageRoot, candidate)
+  if (child === '' || (!child.startsWith(`..${sep}`) && child !== '..' && !isAbsolute(child))) return
+  throw new Error(`client-modules: ${packageName} client bundle resolves outside its package root`)
+}
+
+/** Return whether Node bare-package resolution failed only because the module was absent at this base URL. */
+function isModuleNotFound(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && error.code === 'MODULE_NOT_FOUND'
 }
 
 export default ClientModuleRegistry

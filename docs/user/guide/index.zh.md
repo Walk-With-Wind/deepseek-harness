@@ -24,6 +24,7 @@ Agent（智能体）可以读取和编辑工作区文件、运行命令、委派
 
 ## 继续使用
 
+- [使用桌面应用](./desktop.md)
 - [配置模型](./providers.md)
 - [使用 Python SDK](./python-sdk.md)
 - [使用其他 CLI 模式](../../../apps/cli/README.md)

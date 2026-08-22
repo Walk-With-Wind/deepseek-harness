@@ -22,7 +22,7 @@
 
 两者都在各自的 `package.json` 中通过 `dsh` 字段声明自己：`dsh.profile` 列出一个 profile 的组合包，`dsh.bundle` 指向一个组合包的 patch 文件。
 
-[`dsh-base`](../packages/bundle/base/README.md) 是每个 profile 的第一层：模型适配器、工具、持久化、沙箱与审批策略、设置、凭据、遥测。[`dsh-web-app`](../packages/bundle/web-app/README.md) 增加浏览器应用；[`dsh-headless`](../packages/bundle/headless/README.md) 增加一次性运行器，且完全不带服务器。
+[`dsh-base`](../packages/bundle/base/README.md) 是每个 profile 的第一层：模型适配器、工具、持久化、沙箱与审批策略、设置、凭据、遥测。GUI 产品随后应用 [`dsh-gui-app`](../packages/bundle/gui-app/README.md) 提供共享 Host 能力与客户端 roster，再叠加 [`dsh-web-app`](../packages/bundle/web-app/README.md) 之类的产品传输层。[`dsh-headless`](../packages/bundle/headless/README.md) 则直接在 base 上增加一次性运行器，不带 Host 或 GUI 层。
 
 各层按此顺序应用在空条目列表之上：先按 profile 列出的顺序应用每个组合包，然后是 profile 的 `cordis.patch.yml`，然后是 home 级的那份，最后是任意 `--patch` overlay。一条 patch 按 id 定位某个条目并替换其整个 config，或插入新条目。
 
@@ -35,6 +35,24 @@ dsh --profile web --dump-config
 它打印出的任何条目，都可以由你自己的 patch 替换。
 
 组装机制见 [app-boot](../packages/boot/app-boot/README.md#profiles)；配置字段见生成的[配置目录](config-catalog.md)。
+
+## GUI 产品与 carrier
+
+共享 GUI 组合只延伸到逻辑 Host API 与客户端模块 manifest。`dsh-gui-app` 是该组合的唯一所有者。产品提供 `ClientCarrier`、模块资源交付、平台能力与生命周期策略，无需在客户端插件中按运行环境分支。Web 把 Fetch 与下行流映射到 HTTP／WebSocket；Desktop 把同一信封映射到绑定 generation 的 `MessagePort` 通道，并通过 `app://` 提供打包模块；两种 carrier 都不会改变业务 handler 或会话语义。
+
+```mermaid
+flowchart LR
+  GUI["dsh-gui-app<br/>Host services + client roster"] --> Dispatch["transport-neutral Host dispatch"]
+  Dispatch --> Web["Web carrier<br/>HTTP + WebSocket"]
+  Dispatch --> Utility["Desktop Utility<br/>IPC carrier + Host lease"]
+  Utility --> Main["Desktop Main<br/>native policy + supervisor"]
+  Main --> Preload["Preload<br/>validated narrow bridge"]
+  Preload --> Renderer["sandboxed Renderer<br/>shared AppGuiEntry"]
+```
+
+Desktop 将 Electron 的四种执行角色视为彼此独立的权限主体。Main 持有原生策略和进程监督，但不解析业务正文；Utility 持有 Harness Host、存储、插件和规范化 home 的独占租约；Preload 校验并收窄 Renderer bridge；Renderer 只负责呈现，启用 sandbox 与 context isolation，并禁用 Node integration。只有 profile、资源 manifest 和租约都就绪后，Utility 才会报告 ready；Renderer 还必须通过绑定 generation 的数据端口完成一次 unary Host 描述请求并打开两条事件流，才会报告 ready；只有 Utility 报告 quiescent 后，关停才被视为干净完成。崩溃会创建新的传输 generation，因此旧窗口和旧 port 无法影响替代 Host。
+
+[Desktop 应用 README](../apps/desktop/README.md)负责构建与运行细节；[共享 GUI 与 carrier 决策](../.agents/notes/implemented/architecture/2026-08-16-shared-gui-composition-and-explicit-carrier.md)负责分层理由。
 
 ## 核心包
 

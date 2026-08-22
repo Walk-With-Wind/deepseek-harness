@@ -63,6 +63,7 @@ async function harness(
   picker: DirectoryPickerCapability = { kind: 'native', pick: async () => null },
   extras: {
     openPath?: (path: string, signal: AbortSignal) => Promise<void>
+    authorizeOpenPath?: (path: string, signal: AbortSignal) => Promise<string>
     canOpenPath?: () => boolean
   } = {},
 ) {
@@ -106,6 +107,7 @@ async function harness(
     defaultModelSelection: () => ({ provider: 'test', model: 'test-model' }),
     cwd: root,
     ...extras.openPath === undefined ? {} : { openPath: extras.openPath },
+    ...extras.authorizeOpenPath === undefined ? {} : { authorizeOpenPath: extras.authorizeOpenPath },
     ...extras.canOpenPath === undefined ? {} : { canOpenPath: extras.canOpenPath },
   })
   return { api, ctx, storageDomain, root }
@@ -245,6 +247,41 @@ describe('host.openPath', () => {
     expect((await api.host.openPath(request({ path: '/tmp/a.txt' }), new AbortController().signal)).result)
       .toEqual({ ok: true, value: { opened: true } })
     expect(opened).toEqual(['/tmp/a.txt'])
+  })
+
+  it('authorizes a Renderer-supplied path before invoking the native boundary', async () => {
+    const authorized: string[] = []
+    const opened: string[] = []
+    const { api } = await harness(undefined, undefined, {
+      authorizeOpenPath: async (path) => {
+        authorized.push(path)
+        return '/workspace/canonical.txt'
+      },
+      openPath: async (path) => { opened.push(path) },
+    })
+
+    expect((await api.host.openPath(
+      request({ path: '/workspace/link.txt' }), new AbortController().signal,
+    )).result).toEqual({ ok: true, value: { opened: true } })
+    expect(authorized).toEqual(['/workspace/link.txt'])
+    expect(opened).toEqual(['/workspace/canonical.txt'])
+  })
+
+  it('does not invoke the native boundary when path authorization rejects', async () => {
+    const opened = vi.fn(() => Promise.resolve())
+    const { api } = await harness(undefined, undefined, {
+      authorizeOpenPath: async () => { throw new Error('path is outside registered workspaces') },
+      openPath: opened,
+    })
+
+    const response = await api.host.openPath(
+      request({ path: '/etc/passwd' }), new AbortController().signal,
+    )
+    expect(response.result.ok).toBe(false)
+    if (response.result.ok) throw new Error('unreachable')
+    expect(response.result.error.code).toBe('internal')
+    expect(response.result.error.message).toContain('outside registered workspaces')
+    expect(opened).not.toHaveBeenCalled()
   })
 
   it('propagates abort into the native boundary as a cancelled RPC error', async () => {

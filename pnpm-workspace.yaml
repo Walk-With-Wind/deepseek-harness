@@ -27,6 +27,8 @@ linkWorkspacePackages: true
 overrides:
   '@deepseek-ai/cosmokit': 'link:vendor/cosmokit'
   '@deepseek-ai/schemastery': 'link:vendor/schemastery'
+  # Forge 7 的宽松 rebuild 范围仍选到含 Git 子依赖的 v3；v4 保持公开 API，改用注册表 node-gyp。
+  '@electron/rebuild@^3.7.0': '4.2.0'
 
 peerDependencyRules:
   allowedVersions:
@@ -50,10 +52,15 @@ allowBuilds:
   node-addon-require-builtin: false
   # JSONL durability calls MoveFileExW with write-through publication on Windows.
   koffi: true
+  # Electron 下载固定版本运行时；Forge 只编排本地构建，不在安装期执行发布动作。
+  electron: true
+  # Forge makers 的已审查安装步骤：选择匹配架构的 7zip，并构建 macOS 文件属性/alias addon。
+  electron-winstaller: true
+  fs-xattr: true
+  macos-alias: true
   # The Python runtime deploy includes the reviewed workspace postinstall that
   # restores the executable bit on node-pty's macOS spawn helper.
   '@deepseek-ai/dsh-subprocess-local@file:packages/subprocess/subprocess-local': true
-
 minimumReleaseAgeExclude:
   # Fresh pi-ai releases carry the model catalog updates that are the whole
   # point of bumping it; waiting out the release age would defeat that.

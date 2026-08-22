@@ -1,0 +1,209 @@
+name: Community Desktop Unsigned Preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: '成功完成三目标无签名 Preview 矩阵的 Desktop workflow run id'
+        type: string
+        required: true
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: desktop-community-unsigned-preview
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  publish:
+    environment: desktop-community-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Resolve successful frozen-source build
+        id: build-run
+        env:
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          data="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${BUILD_RUN_ID}")"
+          test "$(jq -r .conclusion <<<"$data")" = success
+          test "$(jq -r .head_repository.full_name <<<"$data")" = "$GITHUB_REPOSITORY"
+          test "$(jq -r .path <<<"$data")" = ".github/workflows/desktop.yml"
+          test "$(jq -r .event <<<"$data")" = workflow_dispatch
+          test "$(jq -r .head_branch <<<"$data")" = master
+          source_commit="$(jq -r .head_sha <<<"$data")"
+          master_commit="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/master" --jq .object.sha)"
+          test "$source_commit" = "$master_commit"
+          jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${BUILD_RUN_ID}/jobs?per_page=100")"
+          jq -e 'any(.jobs[]; .name == "preview-matrix-complete" and .conclusion == "success")' <<<"$jobs"
+          echo "source_commit=$source_commit" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ steps.build-run.outputs.source_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deepseek-harness-community-darwin-arm64-unsigned
+          path: .candidates/darwin-arm64
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deepseek-harness-community-darwin-x64-unsigned
+          path: .candidates/darwin-x64
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deepseek-harness-community-win32-x64-unsigned
+          path: .candidates/win32-x64
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Resolve version and immutable Preview state
+        id: release-state
+        env:
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ steps.build-run.outputs.source_commit }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          tag="dsh-preview-v${version}-${SOURCE_COMMIT:0:12}-run.${BUILD_RUN_ID}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release_exists=false" >> "$GITHUB_OUTPUT"
+          TAG="$tag"
+          tag_exists=false
+          if tag_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$TAG" 2>/dev/null)"; then
+            tag_type="$(jq -r .object.type <<<"$tag_ref")"
+            tag_sha="$(jq -r .object.sha <<<"$tag_ref")"
+            for _ in $(seq 1 8); do
+              if test "$tag_type" = commit; then break; fi
+              test "$tag_type" = tag
+              tag_object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/$tag_sha")"
+              tag_type="$(jq -r .object.type <<<"$tag_object")"
+              tag_sha="$(jq -r .object.sha <<<"$tag_object")"
+            done
+            test "$tag_type" = commit
+            test "$tag_sha" = "$SOURCE_COMMIT"
+            tag_exists=true
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            test "$tag_exists" = true
+            state="$(gh release view "$tag" --json isDraft,isImmutable,isPrerelease,targetCommitish)"
+            test "$(jq -r .isDraft <<<"$state")" = false
+            test "$(jq -r .isImmutable <<<"$state")" = true
+            test "$(jq -r .isPrerelease <<<"$state")" = true
+            test "$(jq -r .targetCommitish <<<"$state")" = "$SOURCE_COMMIT"
+            echo "release_exists=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate complete unsigned matrix and render Preview assets
+        env:
+          VERSION: ${{ steps.release-state.outputs.version }}
+          SOURCE_COMMIT: ${{ steps.build-run.outputs.source_commit }}
+        run: |
+          pnpm run desktop:community-preview -- \
+            --input=.candidates \
+            --output=.preview \
+            --expected-version="$VERSION" \
+            --expected-source-commit="$SOURCE_COMMIT"
+
+      - name: Require repository immutable releases
+        env:
+          GH_TOKEN: ${{ secrets.DSH_RELEASE_ADMIN_TOKEN }}
+        run: |
+          setting="$(gh api \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/immutable-releases")"
+          jq -e '.enabled == true' <<<"$setting"
+
+      - name: Create draft Preview with the complete asset set
+        if: steps.release-state.outputs.release_exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release-state.outputs.version }}
+          TAG: ${{ steps.release-state.outputs.tag }}
+          SOURCE_COMMIT: ${{ steps.build-run.outputs.source_commit }}
+        run: |
+          {
+            echo "UNSIGNED PREVIEW — testing only"
+            echo
+            echo "macOS artifacts are ad-hoc signed and not notarized. Windows artifacts are unsigned."
+            echo "Installation requires an explicit operating-system warning bypass. Automatic updates are disabled."
+            echo "This Preview cannot be promoted to canary or stable."
+            echo
+            echo "Source commit: $SOURCE_COMMIT"
+            echo "Preview manifest: desktop-community-preview-manifest.json"
+          } > .preview/release-notes.md
+          gh release create "$TAG" .preview/release/* \
+            --draft \
+            --prerelease \
+            --target "$SOURCE_COMMIT" \
+            --title "DeepSeek Harness Community Unsigned Preview $VERSION" \
+            --notes-file .preview/release-notes.md
+
+      - name: Verify downloaded draft Release bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release-state.outputs.tag }}
+        run: |
+          mkdir .remote-release
+          gh release download "$TAG" --dir .remote-release
+          (cd .preview/release && sha256sum * | sort) > .expected-release-sha256
+          (cd .remote-release && sha256sum * | sort) > .actual-release-sha256
+          diff -u .expected-release-sha256 .actual-release-sha256
+
+      - name: Publish and verify immutable Preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release-state.outputs.tag }}
+          SOURCE_COMMIT: ${{ steps.build-run.outputs.source_commit }}
+          RELEASE_EXISTS: ${{ steps.release-state.outputs.release_exists }}
+        run: |
+          tag_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$TAG")"
+          tag_type="$(jq -r .object.type <<<"$tag_ref")"
+          tag_sha="$(jq -r .object.sha <<<"$tag_ref")"
+          for _ in $(seq 1 8); do
+            if test "$tag_type" = commit; then break; fi
+            test "$tag_type" = tag
+            tag_object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/$tag_sha")"
+            tag_type="$(jq -r .object.type <<<"$tag_object")"
+            tag_sha="$(jq -r .object.sha <<<"$tag_object")"
+          done
+          test "$tag_type" = commit
+          test "$tag_sha" = "$SOURCE_COMMIT"
+          if test "$RELEASE_EXISTS" != true; then
+            gh release edit "$TAG" --draft=false
+          fi
+          for attempt in $(seq 1 12); do
+            state="$(gh release view "$TAG" --json isDraft,isImmutable,isPrerelease,targetCommitish)"
+            if test "$(jq -r .isDraft <<<"$state")" = false && \
+              test "$(jq -r .isImmutable <<<"$state")" = true && \
+              test "$(jq -r .isPrerelease <<<"$state")" = true && \
+              test "$(jq -r .targetCommitish <<<"$state")" = "$SOURCE_COMMIT"; then
+              break
+            fi
+            if test "$attempt" = 12; then exit 1; fi
+            sleep 5
+          done
+          gh release verify "$TAG"
+          while IFS= read -r -d '' asset; do
+            gh release verify-asset "$TAG" "$asset"
+          done < <(find .preview/release -type f -print0)

@@ -95,6 +95,7 @@ flowchart TD
   end
   subgraph group_session_query["packages/session-query"]
     pkg_session_log_export["session-log-export"]
+    pkg_session_log_saver_web["session-log-saver-web"]
     pkg_session_query["session-query"]
     pkg_session_query_sqlite["session-query-sqlite"]
     pkg_tool_session_query["tool-session-query"]
@@ -116,6 +117,7 @@ flowchart TD
   end
   subgraph group_bundle["packages/bundle"]
     pkg_base["base"]
+    pkg_gui_app["gui-app"]
     pkg_headless["headless"]
     pkg_web_app["web-app"]
   end

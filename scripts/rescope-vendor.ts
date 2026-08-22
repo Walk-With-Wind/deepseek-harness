@@ -74,7 +74,55 @@ interface ExactEdit {
 interface GenericSkip {
   readonly file: string
   readonly upstream: readonly string[]
+  readonly subpaths?: readonly string[]
 }
+
+/** Cordis 事件是运行时协议名，不是 `cordis` 包的 subpath。 */
+const CORDIS_EVENT_SUBPATHS = [
+  '/*',
+  '/',
+  '/dynamic-package',
+  '/dynamic-retract',
+  '/inspect-query',
+  '/inspect-query-resolved',
+  '/request-run',
+  '/request-run-resolved',
+] as const
+
+/** 当前声明、转发、消费或生成 Cordis 事件名的文件。 */
+const CORDIS_EVENT_IDENTIFIER_FILES = [
+  'docs/event-producer-consumer.md',
+  'docs/event-producer-consumer.zh.md',
+  'docs/subsystems/extensions.md',
+  'docs/subsystems/extensions.zh.md',
+  'packages/api/remotes/src/remote-events.ts',
+  'packages/extensions/cordis-client-runner/src/client/index.ts',
+  'packages/extensions/cordis-client-runner/src/client/runtime.ts',
+  'packages/extensions/cordis-client-runner/tests/orchestrator.client.spec.ts',
+  'packages/extensions/cordis-client-runner/tests/plugin.client.spec.ts',
+  'packages/extensions/cordis-host-runner/src/index.ts',
+  'packages/extensions/cordis-host-runner/src/inspect-registry.ts',
+  'packages/extensions/cordis-host-runner/src/types.ts',
+  'packages/extensions/cordis-host-runner/tests/helpers.ts',
+  'packages/extensions/cordis-host-runner/tests/runner.spec.ts',
+  'packages/extensions/cordis-host-runner/tests/versioning.spec.ts',
+  'packages/extensions/tool-cordis/src/api-catalog.ts',
+  'packages/extensions/tool-cordis/src/providers.ts',
+  'packages/extensions/ui-cordis/src/client/index.ts',
+  'packages/extensions/ui-cordis/src/client/inventory.ts',
+] as const
+
+/** 使用裸 `cordis` 作为 locale 或产品目录键、而不是包名的文件。 */
+const CORDIS_BARE_IDENTIFIER_FILES = [
+  'packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx',
+  'packages/extensions/ui-cordis/src/client/CordisActionRow.tsx',
+  'packages/extensions/ui-cordis/src/client/CordisDefineRow.tsx',
+  'packages/extensions/ui-cordis/src/client/CordisPanel.tsx',
+  'packages/extensions/ui-cordis/src/client/CordisRunRow.tsx',
+  'packages/extensions/ui-cordis/src/client/index.ts',
+  'packages/extensions/ui-cordis/src/client/locales.ts',
+  'scripts/gen-cordis-catalog.ts',
+] as const
 
 const GENERIC_SKIPS: readonly GenericSkip[] = [
   // `vendorPackages` lists vendor/ directory names, joined with 'vendor' below it.
@@ -84,7 +132,7 @@ const GENERIC_SKIPS: readonly GenericSkip[] = [
   // Asserts the vendored-manifest table, which gains an upstream-name column.
   { file: 'scripts/gen-third-party-notices.spec.ts', upstream: RENAMES.map(rename => rename.upstream) },
   // `cordis` is also an agent-preset id — the directory name under
-  // apps/cli/config/agent-presets/ — so in these files the bare name is
+  // 该目录位于 packages/bundle/gui-app/agent-presets/，因此这些文件中的裸名称是
   // product data, not a package reference. Renaming it changed which preset
   // the creator flow stages and which id the roster reports.
   { file: 'packages/client/ui-agent-preset/src/client/AgentPresetSection.tsx', upstream: ['cordis'] },
@@ -98,41 +146,23 @@ const GENERIC_SKIPS: readonly GenericSkip[] = [
   // The preset's own composition: its header comment and its system prompt name
   // the preset a model mounts, so the scoped name would send the model after an
   // id no roster reports.
-  { file: 'apps/cli/config/agent-presets/cordis/agent.cordis.yml', upstream: ['cordis'] },
+  { file: 'packages/bundle/gui-app/agent-presets/cordis/agent.cordis.yml', upstream: ['cordis'] },
   // The preset-roster loop names the `cordis` preset id, not a package.
   { file: 'apps/cli/tests/windows-shell.spec.ts', upstream: ['cordis'] },
+  { file: 'packages/bundle/gui-app/tests/gui-app.spec.ts', upstream: ['cordis'] },
   // GROUP_ORDER holds `packages/<group>/` directory names, not package names.
   { file: 'scripts/gen-module-graph.ts', upstream: ['cordis'] },
   { file: 'scripts/gen-doc-graphs.ts', upstream: ['cordis'] },
-  // `cordis/*` is the extensions event domain, not a package subpath. The
-  // generated catalogs and every producer/consumer must preserve that wire id.
-  { file: 'docs/event-producer-consumer.md', upstream: ['cordis'] },
-  { file: 'docs/event-producer-consumer.zh.md', upstream: ['cordis'] },
-  { file: 'docs/subsystems/extensions.md', upstream: ['cordis'] },
-  { file: 'docs/subsystems/extensions.zh.md', upstream: ['cordis'] },
-  { file: 'packages/api/remotes/src/remote-events.ts', upstream: ['cordis'] },
-  { file: 'packages/extensions/cordis-client-runner/src/client/index.ts', upstream: ['cordis'] },
-  { file: 'packages/extensions/cordis-client-runner/src/client/runtime.ts', upstream: ['cordis'] },
-  { file: 'packages/extensions/cordis-client-runner/tests/orchestrator.client.spec.ts', upstream: ['cordis'] },
-  { file: 'packages/extensions/cordis-client-runner/tests/plugin.client.spec.ts', upstream: ['cordis'] },
-  { file: 'packages/extensions/cordis-host-runner/src/index.ts', upstream: ['cordis'] },
-  { file: 'packages/extensions/cordis-host-runner/src/inspect-registry.ts', upstream: ['cordis'] },
-  { file: 'packages/extensions/cordis-host-runner/src/types.ts', upstream: ['cordis'] },
-  { file: 'packages/extensions/cordis-host-runner/tests/helpers.ts', upstream: ['cordis'] },
-  { file: 'packages/extensions/cordis-host-runner/tests/runner.spec.ts', upstream: ['cordis'] },
-  { file: 'packages/extensions/cordis-host-runner/tests/versioning.spec.ts', upstream: ['cordis'] },
-  { file: 'packages/extensions/tool-cordis/src/api-catalog.ts', upstream: ['cordis'] },
-  { file: 'packages/extensions/tool-cordis/src/providers.ts', upstream: ['cordis'] },
-  { file: 'packages/extensions/ui-cordis/src/client/index.ts', upstream: ['cordis'] },
-  { file: 'packages/extensions/ui-cordis/src/client/inventory.ts', upstream: ['cordis'] },
-  { file: 'scripts/gen-cordis-catalog.ts', upstream: ['cordis'] },
-  // The UI locale namespace and input-trigger source id are product keys.
-  { file: 'packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx', upstream: ['cordis'] },
-  { file: 'packages/extensions/ui-cordis/src/client/CordisActionRow.tsx', upstream: ['cordis'] },
-  { file: 'packages/extensions/ui-cordis/src/client/CordisDefineRow.tsx', upstream: ['cordis'] },
-  { file: 'packages/extensions/ui-cordis/src/client/CordisPanel.tsx', upstream: ['cordis'] },
-  { file: 'packages/extensions/ui-cordis/src/client/CordisRunRow.tsx', upstream: ['cordis'] },
-  { file: 'packages/extensions/ui-cordis/src/client/locales.ts', upstream: ['cordis'] },
+  ...CORDIS_EVENT_IDENTIFIER_FILES.map(file => ({
+    file,
+    upstream: ['cordis'],
+    subpaths: CORDIS_EVENT_SUBPATHS,
+  })),
+  ...CORDIS_BARE_IDENTIFIER_FILES.map(file => ({
+    file,
+    upstream: ['cordis'],
+    subpaths: [''],
+  })),
 ]
 
 /** A string that must appear exactly `count` times once the rescope has run. */
@@ -159,8 +189,8 @@ const POSTCONDITIONS: readonly PostCondition[] = [
   // The preset ids in this table are product data, not package names.
   { file: 'packages/client/ui-agent-preset/tests/locales.client.spec.ts', text: '[\'cordis\', \'presetCordisName\'', count: 1 },
   // The preset id the shipped composition documents to its own model.
-  { file: 'apps/cli/config/agent-presets/cordis/agent.cordis.yml', text: 'The `cordis` agent preset', count: 1 },
-  { file: 'apps/cli/config/agent-presets/cordis/agent.cordis.yml', text: 'corrupting the `cordis` preset', count: 1 },
+  { file: 'packages/bundle/gui-app/agent-presets/cordis/agent.cordis.yml', text: 'The `cordis` agent preset', count: 1 },
+  { file: 'packages/bundle/gui-app/agent-presets/cordis/agent.cordis.yml', text: 'corrupting the `cordis` preset', count: 1 },
   { file: 'packages/examples/acp-demo/tests/built-bin.e2e.ts', text: '\'cordis\', \'loader\', \'include\', \'timer\', \'hmr\', \'logger-console\',', count: 1 },
 ]
 
@@ -532,16 +562,24 @@ function patterns(reverse: boolean): Pattern[] {
     }))
 }
 
-function skipped(file: string, pattern: Pattern): boolean {
-  return GENERIC_SKIPS.some(skip => skip.file === file && skip.upstream.includes(pattern.upstream))
+function skipped(file: string, pattern: Pattern, subpath: string): boolean {
+  // 生成目录会在字符串内转义闭合引号；反斜杠属于源码表示，不属于运行时标识。
+  const runtimeSubpath = subpath.endsWith('\\') ? subpath.slice(0, -1) : subpath
+  return GENERIC_SKIPS.some(skip => skip.file === file
+    && skip.upstream.includes(pattern.upstream)
+    && (skip.subpaths === undefined || skip.subpaths.includes(runtimeSubpath)))
 }
 
 function rewriteLine(line: string, file: string, all: readonly Pattern[]): string {
   let out = line
   for (const pattern of all) {
-    if (skipped(file, pattern)) continue
-    out = out.replace(pattern.token, (_match, quote: string, subpath: string) => `${quote}${pattern.to}${subpath}${quote}`)
-    out = out.replace(pattern.yamlName, (_match, prefix: string, suffix: string) => `${prefix}${pattern.to}${suffix}`)
+    out = out.replace(pattern.token, (match, quote: string, subpath: string) => {
+      if (skipped(file, pattern, subpath)) return match
+      return `${quote}${pattern.to}${subpath}${quote}`
+    })
+    if (!skipped(file, pattern, '')) {
+      out = out.replace(pattern.yamlName, (_match, prefix: string, suffix: string) => `${prefix}${pattern.to}${suffix}`)
+    }
   }
   return out
 }
@@ -629,6 +667,8 @@ function main(): void {
   const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })
     .split('\0')
     .filter(file => file !== '' && !excluded(file))
+    // 工作树中的受控迁移会保留已删除的索引路径；检查当前树时只处理仍存在的文件。
+    .filter(file => existsSync(resolve(root, file)))
 
   const counts = new Map<string, { files: number; lines: number }>()
   const failures: string[] = []

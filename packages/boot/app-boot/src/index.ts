@@ -6,6 +6,7 @@
  * @module @deepseek-ai/dsh-app-boot
  */
 
+import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { readFileSync } from 'node:fs'
 import { parseEnv } from 'node:util'
@@ -25,6 +26,8 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Harness-home path resolver available to Loader `!!js` config expressions. */
     dshHomePath?: typeof dshHomePath
+    /** Module base URL used by a closed host to resolve its bundled bare package names. */
+    hostModuleBaseUrl?: string
   }
 }
 
@@ -48,6 +51,28 @@ export {
   type ProfileLayer,
   type ProfileManifest,
 } from './profile.ts'
+export {
+  HostLeaseError,
+  acquireHostLease,
+  canonicalizeHostHome,
+  hostLeaseAddress,
+  type AcquireHostLeaseOptions,
+  type CanonicalHostHome,
+  type HostLease,
+  type HostLeaseErrorCode,
+  type HostLeaseOwner,
+  type HostLeaseOwnerSummary,
+} from './host-lease.ts'
+export {
+  PROFILE_ROOT_FILENAME,
+  bootProfileRuntime,
+  homeProfilePatchPath,
+  prepareProfileRuntime,
+  type BootedProfileRuntime,
+  type BootProfileRuntimeOptions,
+  type PreparedProfileRuntime,
+  type PrepareProfileRuntimeOptions,
+} from './profile-runtime.ts'
 
 /**
  * Resolve the config to boot. Replay swaps a `cordis.yml` basename for
@@ -489,19 +514,30 @@ export async function mountRootInclude(
   patches: readonly PatchOptions[] = [],
   bareModuleBaseUrl?: string,
 ): Promise<Entry | undefined> {
-  ctx.loader.builtins.include = bareModuleBaseUrl === undefined
-    ? Include
-    : class HostResolvedRootInclude extends Include {
+  const profileRequire = createRequire(pathToFileURL(absoluteConfigPath))
+  if (bareModuleBaseUrl === undefined) {
+    ctx.loader.builtins.include = Include
+  } else {
+    const hostRequire = createRequire(bareModuleBaseUrl)
+    ctx.loader.builtins.include = class HostResolvedRootInclude extends Include {
       override import(name: string, getOuterStack?: () => string[]): unknown {
         const specifier = isAbsolute(name) ? pathToFileURL(name).href : name
-        if (name.startsWith('.') || name.startsWith('cordis:')) return super.import(specifier, getOuterStack)
-        const internal = this.ctx.loader.internal
-        /* v8 ignore next -- Node supplies the internal loader; this preserves the
-           original diagnostic for hypothetical embedders without it. */
-        if (internal === undefined) return super.import(specifier, getOuterStack)
-        return internal.import(specifier, bareModuleBaseUrl, {})
+        if (isAbsolute(name) || name.startsWith('.') || name.startsWith('cordis:')) {
+          return super.import(specifier, getOuterStack)
+        }
+        let resolved: string
+        try {
+          // 宿主直接拥有的包优先，确保 package exports 与包自引用不会被 profile 同名包遮蔽。
+          resolved = hostRequire.resolve(specifier)
+        } catch (error) {
+          if (!isModuleNotFound(error)) throw error
+          // 宿主未直接拥有的组合包闭包与用户插件从 profile 根解析。
+          resolved = profileRequire.resolve(specifier)
+        }
+        return import(resolved.startsWith('node:') ? resolved : pathToFileURL(resolved).href)
       }
     }
+  }
   // `cordis:group` alongside it: a group row is how a composition gives one
   // `isolate` realm to a provider and its consumers together, and an agent
   // preset living outside this workspace cannot resolve `@deepseek-ai/cordis-plugin-group`
@@ -526,6 +562,10 @@ export async function mountRootInclude(
   const entry = loader.resolve(includeId)
   bootstrapIncludes.set(ctx, entry)
   return entry
+}
+
+function isModuleNotFound(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && error.code === 'MODULE_NOT_FOUND'
 }
 
 /**
@@ -768,6 +808,8 @@ export async function boot(
   try {
     ctx.baseUrl = pathToFileURL(dirname(absoluteConfigPath)).href + '/'
     ctx.provide('dshHomePath', dshHomePath)
+    // 封闭安装包的 profile 不复制依赖清单，消费者需复用 Loader 的宿主解析基址。
+    if (bareModuleBaseUrl !== undefined) ctx.provide('hostModuleBaseUrl', bareModuleBaseUrl)
     await ctx.plugin(Loader)
     await prepare?.(ctx)
     stage = 'plugin tree failed to load'

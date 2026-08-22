@@ -1,9 +1,10 @@
-/** Browser download state shared by the Session Header button and `/export`. */
+/** Session 导出状态，由 Header 按钮与 `/export` 命令共享。 */
 
 import { createSnapshotStore, type SessionId, type SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SessionLogSaver } from './saver.ts'
 
 /** Download phases presented by the shared modal. */
-export type SessionLogDownloadStatus = 'downloading' | 'success' | 'error'
+export type SessionLogDownloadStatus = 'downloading' | 'success' | 'cancelled' | 'error'
 
 /** One Session's current download-dialog state. */
 export interface SessionLogDownloadEntry {
@@ -17,9 +18,6 @@ export interface SessionLogDownloadState {
   bySession: Record<string, SessionLogDownloadEntry | undefined>
 }
 
-type Fetch = (input: string | URL, init?: RequestInit) => Promise<Response>
-type Save = (url: string, filename: string) => void
-
 const INITIAL: SessionLogDownloadState = { bySession: {} }
 
 /**
@@ -31,29 +29,11 @@ export function sessionLogZipFilename(sessionId: SessionId): string {
   return `dsh-session-${String(sessionId).replace(/[^A-Za-z0-9_-]/g, '_')}.zip`
 }
 
-/**
- * Hand a Host download URL to the browser download manager.
- * @param url - same-origin Host download URL.
- * @param filename - browser download filename.
- */
-export function downloadUrl(url: string, filename: string): void {
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  anchor.click()
-}
-
-/** Resolve the browser's Host base with the connection carrier's null-origin fallback. */
-function hostBase(): string {
-  const origin = (globalThis as { location?: { origin?: string } }).location?.origin
-  return origin !== undefined && origin !== 'null' ? origin : 'http://dsh.internal'
-}
-
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** Owns one in-flight browser download per Session and publishes modal state. */
+/** 每个 Session 只保留一个在途保存操作，并发布统一 modal 状态。 */
 export class SessionLogDownloadController {
   /** uSES-safe state source shared by every Session-scoped modal contribution. */
   readonly store: SnapshotStore<SessionLogDownloadState> = createSnapshotStore(INITIAL)
@@ -62,13 +42,9 @@ export class SessionLogDownloadController {
   private disposed = false
 
   /**
-   * @param fetcher - HTTP carrier used to read the host-streamed ZIP.
-   * @param save - browser save operation.
+   * @param saver - 当前产品提供的保存能力。
    */
-  constructor(
-    private readonly fetcher: Fetch = (input, init) => fetch(input, init),
-    private readonly save: Save = downloadUrl,
-  ) {}
+  constructor(private readonly saver: SessionLogSaver) {}
 
   /**
    * Download one Session tree; concurrent gestures for the same Session share one operation.
@@ -111,17 +87,15 @@ export class SessionLogDownloadController {
   private async run(sessionId: SessionId, signal: AbortSignal): Promise<void> {
     this.publish(sessionId, { open: true, status: 'downloading', error: null })
     try {
-      const url = new URL('/api/session.export', hostBase())
-      url.searchParams.set('sessionId', sessionId)
-      url.searchParams.set('includeDescendants', 'true')
-      const response = await this.fetcher(url, { method: 'HEAD', signal })
-      if (!response.ok) {
-        const detail = await response.text().catch(() => '')
-        throw new Error(`Export failed: HTTP ${response.status}${detail === '' ? '' : ` ${detail}`}`)
-      }
-      this.save(url.toString(), sessionLogZipFilename(sessionId))
+      const outcome = await this.saver.save({
+        sessionId,
+        suggestedName: sessionLogZipFilename(sessionId),
+        signal,
+      })
       const open = this.store.getSnapshot().bySession[String(sessionId)]?.open ?? true
-      this.publish(sessionId, { open, status: 'success', error: null })
+      this.publish(sessionId, outcome === 'saved'
+        ? { open, status: 'success', error: null }
+        : { open: false, status: 'cancelled', error: null })
     } catch (error: unknown) {
       if (signal.aborted) return
       const open = this.store.getSnapshot().bySession[String(sessionId)]?.open ?? true

@@ -48,6 +48,8 @@ const repositoryUrl = 'git+https://github.com/deepseek-harness/deepseek-harness.
  * their trusted publishing against the repository that runs the workflow.
  */
 const publishedRepositoryUrl = 'git+https://github.com/deepseek-ai/deepseek-harness.git'
+/** Community Desktop is published from the contributor fork rather than the official npm source home. */
+const communityDesktopRepositoryUrl = 'git+https://github.com/Walk-With-Wind/deepseek-harness.git'
 /** Private packages that participate in workspace checks but not releases. */
 const experimentalPackageDirectory = /^packages\/experimental\/[^/]+$/
 /** npm namespace reserved for private experimental packages. */
@@ -57,7 +59,16 @@ const releaseMemberDirectory = /^(?:packages\/(?!experimental\/)[^/]+\/[^/]+|app
 
 const localArtifactDirs = new Set(['node_modules'])
 const appPackageFiles: Readonly<Record<string, readonly string[]>> = {
-  '@deepseek-ai/dsh': ['lib/*.js', 'config'],
+  // CLI 不再拥有 GUI preset 目录；共享 GUI bundle 是唯一发布来源。
+  '@deepseek-ai/dsh': ['lib/*.js'],
+  '@deepseek-ai/dsh-desktop': [
+    'lib/*.js',
+    'lib/preload.cjs',
+    'renderer',
+    'desktop.config.json',
+    'cordis.patch.yml',
+    'assets',
+  ],
   // The Web build emits sourcemaps for browser debugging; publishing them is
   // what the payload policy forbids, so the bundle ships without them.
   '@deepseek-ai/dsh-web-frontend': ['dist', '!dist/**/*.map'],
@@ -149,6 +160,8 @@ const packageFileExtras: Readonly<Record<string, readonly string[]>> = {
   '@deepseek-ai/dsh-client-ui-primitives': ['lib/**/*.css'],
   '@deepseek-ai/dsh-client-web': ['lib/**/*.css'],
   '@deepseek-ai/dsh-client-ui-theme': ['lib/styles'],
+  // The GUI bundle owns the immutable built-in Agent Preset roster for Web and Desktop.
+  '@deepseek-ai/dsh-gui-app': ['agent-presets'],
   // The CPython side ships as source .py files, published as-is rather than built.
   '@deepseek-ai/dsh-code-runtime-python': ['py/**/*.py'],
   // The Python runtime uses a distinct closed-resolution bin; the public CLI
@@ -182,11 +195,19 @@ function expectedDshPackageFiles(manifest: PackageManifest): readonly string[] {
     'lib/invariant.js',
     ...manifest.bin ? ['lib/bin.js'] : [],
     ...manifest.exports?.['./worker'] ? ['lib/worker.cjs'] : [],
+    // 物理 Web adapter 可作为独立 Cordis 行叠加在进程中立的包根 core 之后。
+    ...exportDefault(manifest, './web') === './lib/web.js' ? ['lib/web.js'] : [],
     // UI plugin packages ship their browser bundle beside the node lib
     // (single-artifact ruling: dist/ retired, ./client resolves lib/client.js).
     // Keyed on the artifact path, not the subpath name: apiproxy's ./client is
     // a browser-safe source channel, not a bundle.
     ...exportDefault(manifest, './client') === './lib/client.js' ? ['lib/client.js'] : [],
+    // Product shells statically link browser carriers instead of importing a Loader registration bundle.
+    ...exportDefault(manifest, './carrier') === './lib/carrier.js' ? ['lib/carrier.js'] : [],
+    // IPC Host adapter 是独立 Node bundle，Desktop Utility 不加载浏览器入口。
+    ...exportDefault(manifest, './ipc-host') === './lib/ipc-host.js' ? ['lib/ipc-host.js'] : [],
+    // Desktop statically links the module-system bootstrap that enrolls the same instance in the client graph.
+    ...exportDefault(manifest, './bootstrap') === './lib/bootstrap.js' ? ['lib/bootstrap.js'] : [],
     // runtime's shell-held loader subpath ships as its own bundle beside the client half.
     ...exportDefault(manifest, './loader') === './lib/loader.js' ? ['lib/loader.js'] : [],
     // A store subpath ships its own bundle (single-entry builds; no shared chunk).
@@ -292,10 +313,13 @@ function checkWorkspace({ dir, manifest }: WorkspaceManifest): string[] {
     if (manifest.publishConfig?.access !== 'public') {
       errors.push(`${label}: release member must set publishConfig.access to "public"`)
     }
+    const expectedRepositoryUrl = dir === 'apps/desktop'
+      ? communityDesktopRepositoryUrl
+      : publishedRepositoryUrl
     if (manifest.repository?.type !== 'git'
-      || manifest.repository.url !== publishedRepositoryUrl
+      || manifest.repository.url !== expectedRepositoryUrl
       || manifest.repository.directory !== dir) {
-      errors.push(`${label}: release member repository must use ${publishedRepositoryUrl} with directory ${dir}`)
+      errors.push(`${label}: release member repository must use ${expectedRepositoryUrl} with directory ${dir}`)
     }
   } else if (!experimentalPackageDirectory.test(dir) && manifest.private !== true) {
     errors.push(`${label}: package.json must set "private": true`)

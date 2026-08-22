@@ -1,0 +1,17 @@
+{
+  "extends": "../../../tsconfig.base.client.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types"
+  },
+  "include": [
+    "src"
+  ],
+  "references": [
+    { "path": "../../../vendor/cordis" },
+    { "path": "../../client/connection/tsconfig.client.json" },
+    { "path": "../../client/runtime" },
+    { "path": "../../runtime-diagnostics/invariants" },
+    { "path": "../session-log-export" }
+  ]
+}

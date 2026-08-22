@@ -1,0 +1,254 @@
+name: Community Desktop Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: '成功完成完整签名矩阵的 Desktop workflow run id'
+        type: string
+        required: true
+      channel:
+        description: '人工选择发布通道；stable 不会由 canary 自动晋级'
+        type: choice
+        required: true
+        options: [canary, stable]
+      canary_version:
+        description: 'stable 必填：同一源码和版本线的已发布 canary 版本'
+        type: string
+        required: false
+      acceptance_record:
+        description: 'stable 必填：冻结源码中结构化 canary/升级验收 JSON 的相对路径'
+        type: string
+        required: false
+
+permissions:
+  actions: read
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: desktop-community-publish
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  NODE_VERSION: '24'
+
+jobs:
+  publish:
+    environment: desktop-community-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Require explicit stable evidence
+        if: inputs.channel == 'stable'
+        env:
+          CANARY_VERSION: ${{ inputs.canary_version }}
+          ACCEPTANCE_RECORD: ${{ inputs.acceptance_record }}
+        run: |
+          test -n "$CANARY_VERSION" && test -n "$ACCEPTANCE_RECORD"
+          case "$ACCEPTANCE_RECORD" in /*|*..*) exit 1;; esac
+
+      - name: Resolve successful frozen-source build
+        id: build-run
+        env:
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+        run: |
+          data="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${BUILD_RUN_ID}")"
+          test "$(jq -r .conclusion <<<"$data")" = success
+          test "$(jq -r .head_repository.full_name <<<"$data")" = "$GITHUB_REPOSITORY"
+          test "$(jq -r .path <<<"$data")" = ".github/workflows/desktop.yml"
+          test "$(jq -r .event <<<"$data")" = workflow_dispatch
+          test "$(jq -r .head_branch <<<"$data")" = master
+          source_commit="$(jq -r .head_sha <<<"$data")"
+          master_commit="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/master" --jq .object.sha)"
+          test "$source_commit" = "$master_commit"
+          jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${BUILD_RUN_ID}/jobs?per_page=100")"
+          jq -e 'any(.jobs[]; .name == "release-matrix-complete" and .conclusion == "success")' <<<"$jobs"
+          echo "source_commit=$source_commit" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ steps.build-run.outputs.source_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deepseek-harness-community-darwin-arm64-candidate
+          path: .candidates/darwin-arm64
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deepseek-harness-community-darwin-x64-candidate
+          path: .candidates/darwin-x64
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deepseek-harness-community-win32-x64-candidate
+          path: .candidates/win32-x64
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Resolve version and immutable Release state
+        id: release-state
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          CANARY_VERSION: ${{ inputs.canary_version }}
+          ACCEPTANCE_RECORD: ${{ inputs.acceptance_record }}
+          SOURCE_COMMIT: ${{ steps.build-run.outputs.source_commit }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          tag="dsh-v$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release_exists=false" >> "$GITHUB_OUTPUT"
+          mkdir -p .publication-input/existing .publication-input/canary
+          if gh release view "$tag" >/dev/null 2>&1; then
+            state="$(gh release view "$tag" --json isDraft,isImmutable,targetCommitish)"
+            test "$(jq -r .isDraft <<<"$state")" = false
+            test "$(jq -r .isImmutable <<<"$state")" = true
+            test "$(jq -r .targetCommitish <<<"$state")" = "$SOURCE_COMMIT"
+            gh release download "$tag" \
+              --pattern desktop-community-release-manifest.json \
+              --dir .publication-input/existing
+            echo "existing=--existing-release-manifest=.publication-input/existing/desktop-community-release-manifest.json" >> "$GITHUB_OUTPUT"
+            echo "release_exists=true" >> "$GITHUB_OUTPUT"
+          fi
+          if test "$CHANNEL" = stable; then
+            git ls-files --error-unmatch "$ACCEPTANCE_RECORD"
+            test -f "$ACCEPTANCE_RECORD"
+            gh release download "dsh-v$CANARY_VERSION" \
+              --pattern desktop-community-release-manifest.json \
+              --dir .publication-input/canary
+            canary_commit="$(jq -r .sourceCommit .publication-input/canary/desktop-community-release-manifest.json)"
+            git cat-file -e "$canary_commit^{commit}"
+            git merge-base --is-ancestor "$canary_commit" "$SOURCE_COMMIT"
+            echo "canary=--canary-manifest=.publication-input/canary/desktop-community-release-manifest.json" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate complete matrix and render publication tree
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          VERSION: ${{ steps.release-state.outputs.version }}
+          SOURCE_COMMIT: ${{ steps.build-run.outputs.source_commit }}
+          ACCEPTANCE_RECORD: ${{ inputs.acceptance_record }}
+          EXISTING_ARGUMENT: ${{ steps.release-state.outputs.existing }}
+          CANARY_ARGUMENT: ${{ steps.release-state.outputs.canary }}
+        run: |
+          arguments=(
+            --input=.candidates
+            --output=.publication
+            --channel="$CHANNEL"
+            --expected-version="$VERSION"
+            --expected-source-commit="$SOURCE_COMMIT"
+          )
+          if test -n "$EXISTING_ARGUMENT"; then arguments+=("$EXISTING_ARGUMENT"); fi
+          if test -n "$CANARY_ARGUMENT"; then arguments+=("$CANARY_ARGUMENT"); fi
+          if test "$CHANNEL" = stable; then arguments+=("--stable-acceptance=$ACCEPTANCE_RECORD"); fi
+          pnpm run desktop:community-publish -- "${arguments[@]}"
+
+      - name: Require repository immutable releases
+        env:
+          GH_TOKEN: ${{ secrets.DSH_RELEASE_ADMIN_TOKEN }}
+        run: |
+          setting="$(gh api \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/immutable-releases")"
+          jq -e '.enabled == true' <<<"$setting"
+
+      - name: Create draft Release with the complete asset set
+        if: steps.release-state.outputs.release_exists != 'true'
+        env:
+          VERSION: ${{ steps.release-state.outputs.version }}
+          TAG: ${{ steps.release-state.outputs.tag }}
+          CHANNEL: ${{ inputs.channel }}
+          SOURCE_COMMIT: ${{ steps.build-run.outputs.source_commit }}
+        run: |
+          flags=()
+          if test "$CHANNEL" = canary; then flags+=(--prerelease); fi
+          {
+            echo "DeepSeek Harness Community Desktop $CHANNEL release."
+            echo
+            echo "Source commit: $SOURCE_COMMIT"
+            echo "Publication manifest: desktop-community-release-manifest.json"
+          } > .publication/release-notes.md
+          gh release create "$TAG" .publication/release/* \
+            --draft \
+            --target "$SOURCE_COMMIT" \
+            --title "DeepSeek Harness Community Build $VERSION" \
+            --notes-file .publication/release-notes.md \
+            "${flags[@]}"
+
+      - name: Verify downloaded immutable Release bytes
+        env:
+          TAG: ${{ steps.release-state.outputs.tag }}
+        run: |
+          mkdir .remote-release
+          gh release download "$TAG" --dir .remote-release
+          (cd .publication/release && sha256sum * | sort) > .expected-release-sha256
+          (cd .remote-release && sha256sum * | sort) > .actual-release-sha256
+          diff -u .expected-release-sha256 .actual-release-sha256
+
+      - name: Publish and verify immutable Release
+        env:
+          TAG: ${{ steps.release-state.outputs.tag }}
+          SOURCE_COMMIT: ${{ steps.build-run.outputs.source_commit }}
+          RELEASE_EXISTS: ${{ steps.release-state.outputs.release_exists }}
+        run: |
+          if test "$RELEASE_EXISTS" != true; then
+            gh release edit "$TAG" --draft=false
+          fi
+          for attempt in $(seq 1 12); do
+            state="$(gh release view "$TAG" --json isDraft,isImmutable,targetCommitish)"
+            if test "$(jq -r .isDraft <<<"$state")" = false && \
+              test "$(jq -r .isImmutable <<<"$state")" = true && \
+              test "$(jq -r .targetCommitish <<<"$state")" = "$SOURCE_COMMIT"; then
+              break
+            fi
+            if test "$attempt" = 12; then exit 1; fi
+            sleep 5
+          done
+          gh release verify "$TAG"
+          while IFS= read -r -d '' asset; do
+            gh release verify-asset "$TAG" "$asset"
+          done < <(find .publication/release -type f -print0)
+
+      - name: Restore persistent Pages state
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: desktop-pages
+          path: .pages-state
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Persist selected channel without moving the other channel
+        env:
+          VERSION: ${{ steps.release-state.outputs.version }}
+          SOURCE_COMMIT: ${{ steps.build-run.outputs.source_commit }}
+        run: |
+          rsync -a .publication/pages/ .pages-state/
+          git -C .pages-state config user.name github-actions
+          git -C .pages-state config user.email github-actions@github.com
+          git -C .pages-state add --all
+          if ! git -C .pages-state diff --cached --quiet; then
+            git -C .pages-state commit -m "desktop updates $VERSION $SOURCE_COMMIT"
+            git -C .pages-state push origin HEAD:desktop-pages
+          fi
+          mkdir .pages-site
+          rsync -a --exclude=.git .pages-state/ .pages-site/
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: .pages-site
+      - name: Deploy validated update metadata
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

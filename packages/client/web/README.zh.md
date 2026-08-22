@@ -8,7 +8,9 @@ Web 启动内核：`new AppWebEntry(el, seams?).run()` 分两个阶段挂载客�
 
 `PLATFORM_MODULES`（src/platform.ts）是外壳播种共享模块的唯一事实来源。它与 `PRELOADED_CLIENT_EXTERNALS` 一起定义全部动态 bundle 的隐式 external 基座；`dsh.client.external` 只添加基座之外的精确请求。
 
-可选的覆盖参数 `seams` 会为外部 `<script>` 执行无法到达页面上下文的环境转发模块系统的 `loadBundle` 传输覆盖（`BootSeams`）；普通浏览器调用方省略此参数。
+`GuiBootOptions.loadBundle` 为桌面 `app://` 加载与测试转发模块系统的 bundle 传输覆盖。Web 包装层继续为外部 `<script>` 执行无法到达页面上下文的现有调用方保留可选 `BootSeams` 参数。
+
+`AppGuiEntry` 为静态产品外壳执行相同的模块与插件阶段。它安装 bootstrap facade，增加一条用于提供所选载体与平台能力的保留 bootstrap 行，并在加载动态图记录前提供所有静态链接的客户端插件。因此 Web 与 Desktop 共享激活、就绪、故障页和渲染器行为，同时保留各自的产品传输方式。
 
 ## 模型体验
 

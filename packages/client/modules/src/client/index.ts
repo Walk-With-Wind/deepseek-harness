@@ -15,13 +15,15 @@ import { ClientModuleSystem } from './system.ts'
 import { parseBootManifest } from './manifest.ts'
 import type {
   ClientBootstrapModule, ClientModuleCreateOptions, ClientModuleLoaderTarget,
+  ClientModuleManifestOptions,
 } from './manifest.ts'
 
 export { ClientModuleSystem }
 export { parseBootManifest, stripClientSuffix } from './manifest.ts'
 export type {
   BootManifest, BootModuleRow, BootPluginRow, ClientBootstrapModule, ClientBundleRegistration,
-  ClientModuleCreateOptions, ClientModuleLoader, ClientModuleLoaderTarget, ClientModuleRecord,
+  ClientModuleCreateOptions, ClientModuleLoader, ClientModuleLoaderTarget, ClientModuleManifestOptions,
+  ClientModuleRecord,
   ClientModuleSystemOptions, DshWindow,
   WebBootEntry, WebBootGraph,
 } from './manifest.ts'
@@ -40,8 +42,28 @@ export function createClientModuleSystem(
   bootstrapModule: ClientBootstrapModule,
   options: ClientModuleCreateOptions,
 ): ClientModuleSystem {
-  moduleSystem = new ClientModuleSystem({
+  return createClientModuleSystemFromManifest(target, bootstrapModule, {
     manifest: parseBootManifest(options.boot),
+    staticModules: options.staticModules,
+    ...(options.loadBundle === undefined ? {} : { loadBundle: options.loadBundle }),
+  })
+}
+
+/**
+ * Build the live module system from a manifest already validated by a GUI
+ * product's protocol boundary.
+ * @param target - Stable registration facade whose pending queue becomes the live sink.
+ * @param bootstrapModule - This bundle's id and already-materialized exports.
+ * @param options - Parsed manifest, platform seed, and optional bundle transport.
+ * @returns The created module system, also published for this package's Cordis plugin face.
+ */
+export function createClientModuleSystemFromManifest(
+  target: ClientModuleLoaderTarget,
+  bootstrapModule: ClientBootstrapModule,
+  options: ClientModuleManifestOptions,
+): ClientModuleSystem {
+  moduleSystem = new ClientModuleSystem({
+    manifest: options.manifest,
     staticModules: options.staticModules,
     registrationTarget: target,
     bootstrapModule,

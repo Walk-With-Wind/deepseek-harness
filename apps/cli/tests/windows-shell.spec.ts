@@ -1,24 +1,21 @@
 /**
- * The shipped shell composition: the base bundle gates both shell stacks by
- * platform on its own rows (`disabled: !!js process.platform`), so exactly
- * one shell stack mounts per host and no separate platform layer exists —
- * the launcher applies nothing beyond the bundle layers. The spec composes
- * the REAL shipped bundle layers (dsh-base + dsh-web-app resolved from the
- * app installation anchor) through the boot's patch algorithm and pins the
- * effective per-platform roster, the preset-level gates that keep tool-bash
- * out of win32 sessions and tool-pwsh out of POSIX sessions, and the
- * cold-start resolution closure for the pwsh rows' bare plugin names.
+ * 正式 shell 组合由 base 行通过 `disabled: !!js process.platform` 自行按平台门控，
+ * 因此每台宿主只挂载一个 shell 栈，也不需要额外的平台层。测试通过启动时的 patch
+ * 算法组合从应用安装锚点解析出的正式层（dsh-base + dsh-gui-app + dsh-web-app），
+ * 并固定各平台的最终名单、阻止 win32 会话使用 tool-bash 且阻止 POSIX 会话使用
+ * tool-pwsh 的 preset 门控，以及 pwsh 行裸插件名的冷启动解析闭包。
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import yaml from 'js-yaml'
 import { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
 import { evaluate } from '@deepseek-ai/cordis-plugin-loader'
 import { composeEntries, initProfile, loadProfile, PROFILES_DIR } from '@deepseek-ai/dsh-app-boot'
+import { SHIPPED_AGENT_PRESET_ROOT } from '@deepseek-ai/dsh-gui-app'
 
 /**
  * The effective disabled state of one row on one platform: a `!!js` expression
@@ -35,14 +32,15 @@ function disabledOn(row: { disabled?: unknown }, platform: 'win32' | 'linux'): b
 describe('the shipped shell composition (real bundle layers)', () => {
   let home: string
   afterEach(() => { if (home !== undefined) rmSync(home, { recursive: true, force: true }) })
-  // The app installation anchor, mirroring profile-boot.ts: the bundle layers
-  // resolve from the REAL dsh-base/dsh-web-app packages through it, so this
-  // suite composes the shipped patch files, not test fixtures.
+  // 与 profile-boot.ts 一致的应用安装锚点：从真实的 dsh-base、dsh-gui-app 与
+  // dsh-web-app 包解析正式组合层，因此测试组合的是发布 patch，而非 fixture。
   const anchor = fileURLToPath(new URL('../package.json', import.meta.url))
 
   it('composes the confined pwsh roster on win32 and the bash roster on POSIX from the same rows', () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-windows-home-'))
-    initProfile(join(home, PROFILES_DIR, 'web'), ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'])
+    initProfile(join(home, PROFILES_DIR, 'web'), [
+      '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-gui-app', '@deepseek-ai/dsh-web-app',
+    ])
     const profile = loadProfile('dsh', 'web', anchor, home)
     const warnings: string[] = []
     const rows = composeEntries(
@@ -101,7 +99,7 @@ describe('the shipped shell composition (real bundle layers)', () => {
 })
 
 describe('shipped agent presets gate both shell tools by platform', () => {
-  const presetRoot = resolve(fileURLToPath(new URL('../package.json', import.meta.url)), '..', 'config', 'agent-presets')
+  const presetRoot = SHIPPED_AGENT_PRESET_ROOT
 
   it.each(['standard', 'code', 'cordis'])('preset %s gates its shell tool rows by platform', (preset) => {
     const entries: unknown = yaml.load(

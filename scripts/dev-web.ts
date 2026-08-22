@@ -113,6 +113,8 @@ export async function watchClientPlugins(
   const bundles = await build({
     cwd: root,
     workspace: [...pluginDirs],
+    // 使用隔离加载器，避免 Node 22 原生加载钩子与外层 tsx 钩子互相覆盖。
+    configLoader: 'unrun',
     watch: true,
     hooks: {
       'build:done': ({ options }) => {

@@ -4,11 +4,16 @@
  */
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { apply, type ConnectionHandle } from '../src/client/index.ts'
+import {
+  CarrierApiClient,
+  WebClientCarrier,
+  apply,
+  inject,
+  type ConnectionHandle,
+} from '../src/client/index.ts'
 import type { RpcMessage } from '../src/client/api.ts'
 import { RpcId } from '../src/client/api.ts'
 import { FixtureApiClient } from '../src/client/fixture.ts'
-import { WebApiClient } from '../src/client/web-api-client.ts'
 
 type Win = { location?: { hostname: string; search: string; origin?: string } }
 type WebSocketGlobal = { WebSocket?: typeof WebSocket }
@@ -56,7 +61,8 @@ afterEach(() => {
 
 async function mount(): Promise<ConnectionHandle> {
   const ctx = new Context()
-  await ctx.plugin({ apply, inject: [] })
+  ctx.provide('clientCarrier', new WebClientCarrier())
+  await ctx.plugin({ apply, inject })
   const handle = ctx.get('connection') as ConnectionHandle | undefined
   if (handle === undefined) throw new Error('ctx.connection not provided')
   return handle
@@ -66,7 +72,7 @@ describe('connection client apply', () => {
   it('mounts ctx.connection with the real client when no ?fixture switch is present', async () => {
     ;(globalThis as Win).location = { hostname: 'localhost', search: '' }
     const handle = await mount()
-    expect(handle.api).toBeInstanceOf(WebApiClient)
+    expect(handle.api).toBeInstanceOf(CarrierApiClient)
     expect(handle.isLoopback).toBe(true)
   })
 
@@ -75,7 +81,7 @@ describe('connection client apply', () => {
     expect((await mount()).api).toBeInstanceOf(FixtureApiClient)
     delete (globalThis as Win).location
     const handle = await mount()
-    expect(handle.api).toBeInstanceOf(WebApiClient)
+    expect(handle.api).toBeInstanceOf(CarrierApiClient)
     expect(handle.isLoopback).toBe(true)
   })
 
@@ -181,7 +187,7 @@ describe('connection client apply', () => {
     }
     try {
       // Schema rejection is fine — the transport hop is the assertion.
-      await (handle.api as WebApiClient).host.describe({}).catch(() => undefined)
+      await (handle.api as CarrierApiClient).host.describe({}).catch(() => undefined)
       await handle.api.respond({
         type: 'client-response',
         rpcId: RpcId('response-over-http'),
@@ -200,7 +206,7 @@ describe('connection client apply', () => {
     }
     ;(globalThis as WebSocketGlobal).WebSocket = FakeWebSocket as unknown as typeof WebSocket
     const fetch = vi.spyOn(globalThis, 'fetch')
-    const client = (await mount()).api as WebApiClient
+    const client = (await mount()).api as CarrierApiClient
     const envelopes: RpcMessage[][] = []
     client.subscribeEnvelopes((batch) => { envelopes.push([...batch]) })
     const opened: string[] = []
@@ -343,7 +349,8 @@ describe('connection client apply', () => {
       }))
       await expect(handle.rpc.call('/api', 'goals/create', {})).rejects.toThrow('rpcId mismatch')
       const fetch = vi.mocked(globalThis.fetch)
-      expect(fetch.mock.calls[0]?.[0]).toEqual(new URL('http://dsh.internal/api/goals/create'))
+      // 载体基址是启动事实；后续篡改页面 location 不会改变已经注入的连接目标。
+      expect(fetch.mock.calls[0]?.[0]).toEqual(new URL('https://harness.example/api/goals/create'))
       expect(fetch.mock.calls[0]?.[1]).not.toHaveProperty('signal')
     } finally {
       globalThis.fetch = original

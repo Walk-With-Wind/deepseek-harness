@@ -598,6 +598,8 @@ export interface ApiProxyDefaults {
   cwd: string
   /** Native open-with-default-application; injectable for carrier tests. */
   openPath?: (path: string, signal: AbortSignal) => Promise<void>
+  /** 在接受客户端提交的路径后、调用原生打开器前完成产品级授权并返回规范路径。 */
+  authorizeOpenPath?: (path: string, signal: AbortSignal) => Promise<string>
   /** Native text-editor handoff; injectable for settings-document tests. */
   openTextFile?: (path: string, signal: AbortSignal) => Promise<void>
   /** Validated DEFLATE level for session-log ZIP entries; defaults to 6. */
@@ -1849,6 +1851,21 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     return openTarget(request, path, signal, open)
   }
 
+  /** 对客户端提交的原始路径执行产品策略授权后再进入统一原生打开流程。 */
+  function openRequestedPath(
+    request: RpcRequest<unknown>, path: string, signal: AbortSignal,
+  ): Promise<RpcResponse<{ opened: true }>> {
+    const open = async (target: string, openSignal: AbortSignal): Promise<void> => {
+      const authorized = defaults.authorizeOpenPath === undefined
+        ? target
+        : await defaults.authorizeOpenPath(target, openSignal)
+      const nativeOpen = defaults.openPath
+        ?? ((value: string, nativeSignal: AbortSignal) => openNativePath(value, nativeSignal))
+      await nativeOpen(authorized, openSignal)
+    }
+    return openTarget(request, path, signal, open)
+  }
+
   /** Open one Host-resolved text document in a native editor. */
   function openTextFile(
     request: RpcRequest<unknown>, path: string, signal: AbortSignal,
@@ -2923,7 +2940,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
 
       async openPath(request, signal) {
-        return openPath(request, request.payload.path, signal)
+        return openRequestedPath(request, request.payload.path, signal)
       },
     },
 

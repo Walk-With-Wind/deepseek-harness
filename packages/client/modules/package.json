@@ -22,6 +22,14 @@
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
+    "./bootstrap": {
+      "types": "./lib/types/bootstrap.d.ts",
+      "default": "./lib/bootstrap.js"
+    },
+    "./web": {
+      "types": "./lib/types/web.d.ts",
+      "default": "./lib/web.js"
+    },
     "./invariant": {
       "types": "./lib/types/invariant.d.ts",
       "default": "./lib/invariant.js"
@@ -41,6 +49,9 @@
     "watch": "tsdown --watch"
   },
   "license": "MIT",
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
   "devDependencies": {
     "@deepseek-ai/cordis-plugin-loader": "workspace:^",
     "@deepseek-ai/dsh-host-webserver": "workspace:^",
@@ -50,7 +61,9 @@
   "files": [
     "lib/index.js",
     "lib/invariant.js",
+    "lib/web.js",
     "lib/client.js",
+    "lib/bootstrap.js",
     "lib/types/**/*.d.ts"
   ],
   "peerDependencies": {

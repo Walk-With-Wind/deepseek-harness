@@ -1751,6 +1751,36 @@
       "source": "packages/client/modules/src/client/manifest.ts"
     },
     {
+      "doc": "docs/subsystems/client-modules.md",
+      "symbol": "ClientResourceEntry",
+      "source": "packages/client/modules/src/resource-manifest.ts"
+    },
+    {
+      "doc": "docs/subsystems/client-modules.md",
+      "symbol": "ClientResourceManifest",
+      "source": "packages/client/modules/src/resource-manifest.ts"
+    },
+    {
+      "doc": "docs/subsystems/host-lifecycle.md",
+      "symbol": "HostLeaseOwnerSummary",
+      "source": "packages/boot/app-boot/src/host-lease.ts"
+    },
+    {
+      "doc": "docs/subsystems/host-lifecycle.md",
+      "symbol": "HostLeaseOwner",
+      "source": "packages/boot/app-boot/src/host-lease.ts"
+    },
+    {
+      "doc": "docs/subsystems/host-lifecycle.md",
+      "symbol": "CanonicalHostHome",
+      "source": "packages/boot/app-boot/src/host-lease.ts"
+    },
+    {
+      "doc": "docs/subsystems/host-lifecycle.md",
+      "symbol": "HostLease",
+      "source": "packages/boot/app-boot/src/host-lease.ts"
+    },
+    {
       "doc": "docs/subsystems/session-telemetry.md",
       "symbol": "SessionTelemetrySharingStatus",
       "source": "packages/session/session-telemetry/src/index.ts"

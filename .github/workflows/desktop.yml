@@ -1,0 +1,420 @@
+name: Desktop
+
+on:
+  pull_request:
+    paths:
+      - 'apps/desktop/**'
+      - 'packages/boot/app-boot/**'
+      - 'packages/bundle/gui-app/**'
+      - 'packages/client/**'
+      - 'packages/session-query/session-log-export/**'
+      - 'packages/session-query/session-log-saver-web/**'
+      - 'scripts/desktop*.ts'
+      - 'scripts/desktop*.mjs'
+      - 'scripts/lib/desktop-*.ts'
+      - 'scripts/lib/runtime-staging*.ts'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: '从冻结源执行受保护签名/公证构建；不发布远端 channel'
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: '24'
+  DSH_TELEMETRY_DISABLED: '1'
+  DSH_DESKTOP_BUILD_SEQUENCE: ${{ github.run_number }}
+
+jobs:
+  shared:
+    name: shared / protocol, GUI and renderer
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run Desktop and shared contract tests
+        run: pnpm run test:desktop
+      - name: Verify 1 KiB unary IPC p95 overhead
+        run: pnpm run test:desktop:ipc-latency
+      - name: Build Desktop renderer and both compiler faces
+        run: pnpm run build:desktop
+
+  unsigned-native:
+    if: github.event_name == 'pull_request' || !inputs.release
+    needs: shared
+    name: unsigned / ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      NODE_OPTIONS: '--max-old-space-size=5120'
+      DSH_DESKTOP_RELEASE_MODE: ${{ github.event_name == 'workflow_dispatch' && !inputs.release && 'unsigned-preview' || 'development' }}
+      DSH_DESKTOP_PACKAGE_DIAGNOSTICS: ${{ matrix.platform == 'win32' && '1' || '0' }}
+      DSH_DESKTOP_FAULT_ACCEPTANCE: '1'
+      DSH_DESKTOP_CIRCUIT_ACCEPTANCE: '1'
+      DSH_DESKTOP_RENDERER_CIRCUIT_ACCEPTANCE: '1'
+      DSH_DESKTOP_CRASH_RESTART_ACCEPTANCE: '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-15
+            platform: darwin
+            arch: arm64
+          - target: darwin-x64
+            runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - target: win32-x64
+            runner: windows-2022
+            platform: win32
+            arch: x64
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Assert native runner architecture
+        run: node -e "if(process.platform!=='${{ matrix.platform }}'||process.arch!=='${{ matrix.arch }}')throw new Error(process.platform+'-'+process.arch)"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build:desktop
+      - name: Build native installers and release materials
+        run: pnpm exec tsx scripts/desktop.ts make --platform=${{ matrix.platform }} --arch=${{ matrix.arch }}
+      - name: Verify packaged application
+        run: pnpm run verify:desktop-artifact
+      - name: Verify tampered ASAR copy refuses startup
+        if: runner.os == 'macOS'
+        run: pnpm run test:desktop:asar-tamper
+      - name: Install, smoke, uninstall and reinstall final maker artifacts
+        run: pnpm run test:desktop:installer
+      - name: Verify SBOM, notices, hashes and provenance
+        run: pnpm run verify:desktop-materials
+      - name: Record unsigned Preview acceptance
+        if: github.event_name == 'workflow_dispatch' && !inputs.release
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          pnpm exec tsx scripts/desktop-preview-acceptance.ts \
+            --target=${{ matrix.target }} \
+            --version="$version" \
+            --source-commit=${{ github.sha }} \
+            --artifact-root=.artifacts/desktop/out/make
+          test -f .artifacts/desktop/out/make/preview-acceptance.json
+          node -e "const value=require('./.artifacts/desktop/out/make/preview-acceptance.json');if(value.signatureVerified!==true)process.exit(1)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deepseek-harness-community-${{ matrix.target }}-unsigned
+          path: .artifacts/desktop/out/make/
+          if-no-files-found: error
+          retention-days: 7
+
+  signed-release:
+    if: github.event_name == 'workflow_dispatch' && inputs.release
+    needs: shared
+    environment: desktop-release
+    name: signed / ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-15
+            platform: darwin
+            arch: arm64
+          - target: darwin-x64
+            runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - target: win32-x64
+            runner: windows-2022
+            platform: win32
+            arch: x64
+    env:
+      NODE_OPTIONS: '--max-old-space-size=5120'
+      DSH_DESKTOP_RELEASE_MODE: 'signed'
+      DSH_DESKTOP_PACKAGE_DIAGNOSTICS: ${{ matrix.platform == 'win32' && '1' || '0' }}
+      DSH_DESKTOP_SIGNING: '1'
+      DSH_DESKTOP_REQUIRE_SIGNING: '1'
+      DSH_DESKTOP_FULL_ACCEPTANCE: '1'
+      DSH_DESKTOP_INSTALLED_EXPORT_ACCEPTANCE: '1'
+      DSH_DESKTOP_CIRCUIT_ACCEPTANCE: '1'
+      DSH_DESKTOP_RENDERER_CIRCUIT_ACCEPTANCE: '1'
+      DSH_DESKTOP_CRASH_RESTART_ACCEPTANCE: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Assert native runner architecture
+        run: node -e "if(process.platform!=='${{ matrix.platform }}'||process.arch!=='${{ matrix.arch }}')throw new Error(process.platform+'-'+process.arch)"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build:desktop
+      - name: Import protected macOS signing credentials
+        if: runner.os == 'macOS'
+        env:
+          MAC_CERTIFICATE_P12_BASE64: ${{ secrets.DSH_MAC_CERTIFICATE_P12_BASE64 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.DSH_MAC_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.DSH_APPLE_API_KEY_BASE64 }}
+          DSH_APPLE_API_KEY_ID: ${{ secrets.DSH_APPLE_API_KEY_ID }}
+        run: |
+          keychain="$RUNNER_TEMP/desktop-signing.keychain-db"
+          certificate="$RUNNER_TEMP/desktop-signing.p12"
+          api_key="$RUNNER_TEMP/AuthKey_${DSH_APPLE_API_KEY_ID}.p8"
+          printf '%s' "$MAC_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate"
+          printf '%s' "$APPLE_API_KEY_BASE64" | base64 --decode > "$api_key"
+          security create-keychain -p "$RUNNER_TEMP" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$RUNNER_TEMP" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$MAC_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$RUNNER_TEMP" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          echo "DSH_APPLE_API_KEY_PATH=$api_key" >> "$GITHUB_ENV"
+      - name: Import protected Windows signing certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.DSH_WINDOWS_CERTIFICATE_PFX_BASE64 }}
+        run: |
+          $certificate = Join-Path $env:RUNNER_TEMP 'desktop-signing.pfx'
+          [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX_BASE64))
+          "DSH_WINDOWS_CERTIFICATE_PATH=$certificate" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Build signed native installers and release materials
+        env:
+          DSH_MAC_SIGN_IDENTITY: ${{ secrets.DSH_MAC_SIGN_IDENTITY }}
+          DSH_APPLE_API_KEY_ID: ${{ secrets.DSH_APPLE_API_KEY_ID }}
+          DSH_APPLE_API_ISSUER: ${{ secrets.DSH_APPLE_API_ISSUER }}
+          DSH_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.DSH_WINDOWS_CERTIFICATE_PASSWORD }}
+        run: pnpm exec tsx scripts/desktop.ts make --platform=${{ matrix.platform }} --arch=${{ matrix.arch }}
+      - name: Notarize and staple final macOS disk images
+        if: runner.os == 'macOS'
+        env:
+          DSH_APPLE_API_KEY_ID: ${{ secrets.DSH_APPLE_API_KEY_ID }}
+          DSH_APPLE_API_ISSUER: ${{ secrets.DSH_APPLE_API_ISSUER }}
+        run: |
+          while IFS= read -r -d '' dmg; do
+            xcrun notarytool submit "$dmg" --key "$DSH_APPLE_API_KEY_PATH" --key-id "$DSH_APPLE_API_KEY_ID" --issuer "$DSH_APPLE_API_ISSUER" --wait
+            xcrun stapler staple "$dmg"
+          done < <(find .artifacts/desktop/out/make -name '*.dmg' -print0)
+          pnpm exec tsx scripts/desktop.ts materials --platform=${{ matrix.platform }} --arch=${{ matrix.arch }}
+      - name: Remove protected macOS signing credentials
+        if: runner.os == 'macOS'
+        run: |
+          security list-keychains -d user -s "$HOME/Library/Keychains/login.keychain-db" || true
+          security delete-keychain "$RUNNER_TEMP/desktop-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/desktop-signing.p12" "$DSH_APPLE_API_KEY_PATH"
+      - name: Remove protected Windows signing credentials
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'desktop-signing.pfx') -Force -ErrorAction SilentlyContinue
+      - name: Verify installed application signature, fuses and ASAR
+        env:
+          DSH_MAC_EXPECTED_TEAM_ID: ${{ secrets.DSH_MAC_EXPECTED_TEAM_ID }}
+          DSH_MAC_SIGN_IDENTITY: ${{ secrets.DSH_MAC_SIGN_IDENTITY }}
+          DSH_WINDOWS_EXPECTED_SIGNER_THUMBPRINT: ${{ secrets.DSH_WINDOWS_EXPECTED_SIGNER_THUMBPRINT }}
+        run: pnpm run verify:desktop-artifact
+      - name: Verify tampered ASAR copy refuses startup
+        if: runner.os == 'macOS'
+        run: pnpm run test:desktop:asar-tamper
+      - name: Install, smoke, uninstall and reinstall final maker artifacts
+        run: pnpm run test:desktop:installer
+      - name: Verify installer signatures on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          DSH_WINDOWS_EXPECTED_SIGNER_THUMBPRINT: ${{ secrets.DSH_WINDOWS_EXPECTED_SIGNER_THUMBPRINT }}
+        run: |
+          $expectedThumbprint = $env:DSH_WINDOWS_EXPECTED_SIGNER_THUMBPRINT.Replace(' ', '').ToUpperInvariant()
+          if ($expectedThumbprint -notmatch '^[0-9A-F]{40}$') { throw 'Invalid expected Windows signer thumbprint' }
+          Get-ChildItem .artifacts/desktop/out/make -Recurse -Filter *.exe | ForEach-Object {
+            $signature = Get-AuthenticodeSignature $_.FullName
+            if ($signature.Status -ne 'Valid') { throw "Invalid signature: $($_.FullName)" }
+            $actualThumbprint = $signature.SignerCertificate.Thumbprint.Replace(' ', '').ToUpperInvariant()
+            if ($actualThumbprint -ne $expectedThumbprint) { throw "Unexpected signer: $($_.FullName)" }
+            if ($null -eq $signature.TimeStamperCertificate) { throw "Missing timestamp: $($_.FullName)" }
+          }
+      - name: Verify notarization staple on macOS
+        if: runner.os == 'macOS'
+        run: find .artifacts/desktop/out/make -name '*.dmg' -print0 | xargs -0 -n1 xcrun stapler validate
+      - name: Verify SBOM, notices, hashes and provenance
+        run: pnpm run verify:desktop-materials
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deepseek-harness-community-${{ matrix.target }}-signed
+          path: .artifacts/desktop/out/make/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Ensure protected macOS signing credentials are removed
+        if: always() && runner.os == 'macOS'
+        run: |
+          security list-keychains -d user -s "$HOME/Library/Keychains/login.keychain-db" || true
+          security delete-keychain "$RUNNER_TEMP/desktop-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/desktop-signing.p12" "$DSH_APPLE_API_KEY_PATH"
+      - name: Ensure protected Windows signing credentials are removed
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'desktop-signing.pfx') -Force -ErrorAction SilentlyContinue
+
+  endurance-release:
+    if: github.event_name == 'workflow_dispatch' && inputs.release
+    needs: signed-release
+    environment: desktop-release
+    name: endurance / ${{ matrix.target }} / installed 60 minute IPC stream
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-15
+            platform: darwin
+            arch: arm64
+          - target: darwin-x64
+            runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - target: win32-x64
+            runner: windows-2022
+            platform: win32
+            arch: x64
+    env:
+      DSH_DESKTOP_ATTACHMENT_DIAGNOSTIC_BYTES: '1048576'
+      DSH_DESKTOP_INSTALLED_ENDURANCE_ACCEPTANCE: '1'
+      DSH_DESKTOP_INSTALLED_UNARY_LATENCY_ACCEPTANCE: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deepseek-harness-community-${{ matrix.target }}-signed
+          path: .endurance-artifact
+      - name: Install signed macOS maker artifact
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          package="$(find .endurance-artifact -name '*.dmg' -print -quit)"
+          test -n "$package"
+          mount="$RUNNER_TEMP/dsh-desktop-endurance-mount"
+          installed="$RUNNER_TEMP/Applications/DeepSeek Harness Community Build.app"
+          mkdir -p "$mount" "$(dirname "$installed")"
+          attached=0
+          cleanup_mount() {
+            if test "$attached" = 1; then hdiutil detach "$mount" -force; fi
+          }
+          trap cleanup_mount EXIT
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$package"
+          attached=1
+          ditto "$mount/DeepSeek Harness Community Build.app" "$installed"
+          hdiutil detach "$mount"
+          attached=0
+          echo "DSH_DESKTOP_SMOKE_EXECUTABLE=$installed/Contents/MacOS/deepseek-harness-community" >> "$GITHUB_ENV"
+          echo "DSH_DESKTOP_SMOKE_PRODUCT=$installed/Contents/MacOS" >> "$GITHUB_ENV"
+      - name: Install signed Windows maker artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $package = Get-ChildItem .endurance-artifact -Recurse -Filter 'DeepSeek-Harness-Community-Setup.exe' | Select-Object -First 1
+          if ($null -eq $package) { throw 'Signed Squirrel installer not found' }
+          Start-Process -FilePath $package.FullName -ArgumentList '--silent' -Wait
+          $installRoot = Join-Path $env:LOCALAPPDATA 'DeepSeekHarnessCommunity'
+          $executable = Get-ChildItem $installRoot -Recurse -Filter 'deepseek-harness-community.exe' | Select-Object -First 1
+          if ($null -eq $executable) { throw 'Installed Desktop executable not found' }
+          "DSH_DESKTOP_SMOKE_EXECUTABLE=$($executable.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "DSH_DESKTOP_SMOKE_PRODUCT=$($executable.Directory.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Verify installed 60 minute streaming, cancellation and port rotation
+        run: node scripts/desktop-installed-data-smoke.mjs
+      - name: Record complete signed candidate acceptance
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          pnpm exec tsx scripts/desktop-release-acceptance.ts \
+            --target=${{ matrix.target }} \
+            --version="$version" \
+            --source-commit=${{ github.sha }} \
+            --artifact-root=.endurance-artifact \
+            --endurance-minutes=60 \
+            --installed-export-bytes=1073741824
+          test -f .endurance-artifact/release-acceptance.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deepseek-harness-community-${{ matrix.target }}-candidate
+          path: .endurance-artifact/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove endurance macOS application
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/Applications/DeepSeek Harness Community Build.app" "$RUNNER_TEMP/dsh-desktop-endurance-mount"
+      - name: Uninstall endurance Windows application
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installRoot = Join-Path $env:LOCALAPPDATA 'DeepSeekHarnessCommunity'
+          $update = Join-Path $installRoot 'Update.exe'
+          if (Test-Path -LiteralPath $update) {
+            Start-Process -FilePath $update -ArgumentList '--uninstall', '-s' -Wait
+          }
+          Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
+  release-matrix-complete:
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.release
+    needs: [signed-release, endurance-release]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Refuse partial release matrix
+        env:
+          SIGNED_RESULT: ${{ needs.signed-release.result }}
+          ENDURANCE_RESULT: ${{ needs.endurance-release.result }}
+        run: test "$SIGNED_RESULT" = success && test "$ENDURANCE_RESULT" = success
+      - name: Preserve manual publication boundary
+        run: echo 'Signed artifacts are verified but no remote update metadata or stable channel was published.'
+
+  preview-matrix-complete:
+    if: always() && github.event_name == 'workflow_dispatch' && !inputs.release
+    needs: unsigned-native
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Refuse partial unsigned Preview matrix
+        env:
+          UNSIGNED_RESULT: ${{ needs.unsigned-native.result }}
+        run: test "$UNSIGNED_RESULT" = success
+      - name: Preserve manual Preview publication boundary
+        run: echo 'Unsigned Preview artifacts are verified but no Release or update metadata was published.'

@@ -12,6 +12,7 @@ import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { resolveSessionPreset, SETTINGS_NAMESPACE } from '@deepseek-ai/dsh-agent-presets'
+import { SHIPPED_AGENT_PRESET_ROOT } from '@deepseek-ai/dsh-gui-app'
 import { applyChildComposition, childSessionMeta } from '@deepseek-ai/dsh-subagent'
 import { CallId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-compaction-basic'
@@ -21,10 +22,10 @@ import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import type {} from '@deepseek-ai/dsh-token-meter'
 
-const CONFIG_DIR = fileURLToPath(new URL('../config/', import.meta.url))
 const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url))
-/** The shipped Web surface: the dsh-base and dsh-web-app bundle patches over an empty preset root. */
+/** 正式 Web 组合：在空 profile 根上依次叠加 base、共享 GUI 与 Web 传输层。 */
 const BASE_PATCH = join(REPO_ROOT, 'packages/bundle/base/cordis.patch.yml')
+const GUI_PATCH = join(REPO_ROOT, 'packages/bundle/gui-app/cordis.patch.yml')
 const WEB_PATCH = join(REPO_ROOT, 'packages/bundle/web-app/cordis.patch.yml')
 const CODEX_PACKAGE_DIR = join(REPO_ROOT, 'packages/subagent/subagent-codex')
 const CLAUDE_CODE_PACKAGE_DIR = join(REPO_ROOT, 'packages/subagent/subagent-claude-code')
@@ -103,7 +104,7 @@ async function bootWeb(
       id: 'agent-presets',
       config: {
         default: 'standard',
-        roots: [{ path: join(CONFIG_DIR, 'agent-presets'), trust: 'system' }],
+        roots: [{ path: SHIPPED_AGENT_PRESET_ROOT, trust: 'system' }],
         includeUserRoot: false,
       },
     },
@@ -129,6 +130,7 @@ async function bootWeb(
   }
   let bundlePatches: PatchOptions[] = [
     ...loadOverlayPatches('dsh-test', BASE_PATCH),
+    ...loadOverlayPatches('dsh-test', GUI_PATCH),
     ...loadOverlayPatches('dsh-test', WEB_PATCH),
   ]
   if (profileBundles !== undefined) {
@@ -365,7 +367,7 @@ describe('the shipped Web composition', () => {
     // The preset's skill root is derived from its own `baseUrl`, so the skill
     // travels with the directory wherever the preset is installed.
     const skill = join(
-      CONFIG_DIR, 'agent-presets', 'cordis', 'skills', 'editing-cordis-compositions', 'SKILL.md',
+      SHIPPED_AGENT_PRESET_ROOT, 'cordis', 'skills', 'editing-cordis-compositions', 'SKILL.md',
     )
 
     expect((await readFile(skill, 'utf8')).startsWith('---\nname: editing-cordis-compositions')).toBe(true)
@@ -437,7 +439,7 @@ describe('the shipped Web composition', () => {
     // agent down disposes its whole subtree. Inherited, that rewrote the
     // shipped composition — truncating it to `[]` the first time a session
     // ended — so `PresetTree` refuses to write at all.
-    const path = join(CONFIG_DIR, 'agent-presets', 'standard', 'agent.cordis.yml')
+    const path = join(SHIPPED_AGENT_PRESET_ROOT, 'standard', 'agent.cordis.yml')
     const before = await readFile(path, 'utf8')
 
     const handle = await ctx.agents.create({
@@ -465,7 +467,7 @@ describe('product Bundle and user-preset intersection', () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-product-presets-'))
     const userRoot = join(root, 'presets')
     const settingsFile = join(root, 'settings.yaml')
-    const standard = await readFile(join(CONFIG_DIR, 'agent-presets', 'standard', 'agent.cordis.yml'), 'utf8')
+    const standard = await readFile(join(SHIPPED_AGENT_PRESET_ROOT, 'standard', 'agent.cordis.yml'), 'utf8')
     await writeFile(settingsFile, '{}\n')
     for (const id of presetIds) {
       let composition = standard
@@ -493,7 +495,7 @@ describe('product Bundle and user-preset intersection', () => {
         config: {
           default: 'standard',
           roots: [
-            { path: join(CONFIG_DIR, 'agent-presets'), trust: 'system' },
+            { path: SHIPPED_AGENT_PRESET_ROOT, trust: 'system' },
             { path: userRoot, trust: 'user' },
           ],
           includeUserRoot: false,
@@ -736,7 +738,7 @@ describe('a launcher that configures no writable root', () => {
       id: 'agent-presets',
       config: {
         default: 'standard',
-        roots: [{ path: join(CONFIG_DIR, 'agent-presets'), trust: 'system' }],
+        roots: [{ path: SHIPPED_AGENT_PRESET_ROOT, trust: 'system' }],
         includeUserRoot: true,
       },
     }])
@@ -782,7 +784,7 @@ describe('authoring a preset on the shipped composition', () => {
       config: {
         default: 'standard',
         roots: [
-          { path: join(CONFIG_DIR, 'agent-presets'), trust: 'system' },
+          { path: SHIPPED_AGENT_PRESET_ROOT, trust: 'system' },
           // The root does not exist yet: a deployment whose user has authored
           // nothing is the normal first-run state.
           { path: userRoot, trust: 'user' },

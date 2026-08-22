@@ -8,7 +8,9 @@ The boot page uses plain DOM and local CSS, so client-bundle and plugin-activati
 
 `PLATFORM_MODULES` (src/platform.ts) is the single source of truth for shell-seeded shared modules. Together with `PRELOADED_CLIENT_EXTERNALS`, it defines the implicit external baseline for every dynamic bundle; `dsh.client.external` adds only exact non-baseline requests.
 
-The optional override parameter `seams` forwards the module system's `loadBundle` transport override (`BootSeams`) for environments where external `<script>` execution cannot reach the page context; ordinary browser callers omit it.
+`GuiBootOptions.loadBundle` forwards the module system's bundle transport override for desktop `app://` loading and tests. The Web wrapper retains the optional `BootSeams` argument for existing callers whose external `<script>` execution cannot reach the page context.
+
+`AppGuiEntry` runs the same module and plugin stages for a static product shell. It installs the bootstrap facade, adds one reserved bootstrap row that provides the selected carrier and platform capabilities, and supplies any statically linked client plugins before loading dynamic graph entries. Web and Desktop therefore share activation, readiness, failure-page, and renderer behavior while retaining product-specific transports.
 
 ## Model Experience
 

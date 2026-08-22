@@ -135,19 +135,22 @@ function validateClientHalvesDeclared(): string[] {
  */
 function validatePresetPlaneSeparation(): string[] {
   const problems: string[] = []
-  // The shipped Web surface is two bundle patch layers over an empty root.
-  const hostFile = 'packages/bundle/base/cordis.patch.yml'
-  const overlayFile = 'packages/bundle/web-app/cordis.patch.yml'
-  const hostRows = rowIds(hostFile)
-  const overlay = loadEntries(overlayFile)
+  // 正式 Web 组合依次叠加 base、共享 GUI 与浏览器传输层。
+  const layerFiles = [
+    'packages/bundle/base/cordis.patch.yml',
+    'packages/bundle/gui-app/cordis.patch.yml',
+    'packages/bundle/web-app/cordis.patch.yml',
+  ]
   const disabled = new Set<string>()
-  for (const entry of overlay) {
-    if (!isRecord(entry)) continue
-    if (entry.disabled === true && typeof entry.id === 'string') disabled.add(entry.id)
+  for (const file of layerFiles.slice(1)) {
+    for (const entry of loadEntries(file)) {
+      if (!isRecord(entry)) continue
+      if (entry.disabled === true && typeof entry.id === 'string') disabled.add(entry.id)
+    }
   }
-  // The overlay's own inserts are host-plane too; its disables take them back out.
-  const active = new Set([...hostRows, ...rowIds(overlayFile)].filter(id => !disabled.has(id)))
-  for (const file of globSync('apps/cli/config/agent-presets/*/agent.cordis.yml', { cwd: root })) {
+  // 各层插入的行都属于 Host；后层 disabled 会将同 id 的行移出有效集合。
+  const active = new Set(layerFiles.flatMap(file => [...rowIds(file)]).filter(id => !disabled.has(id)))
+  for (const file of globSync('packages/bundle/gui-app/agent-presets/*/agent.cordis.yml', { cwd: root })) {
     for (const id of rowIds(file)) {
       if (!active.has(id)) continue
       problems.push(

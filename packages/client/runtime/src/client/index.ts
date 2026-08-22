@@ -182,11 +182,14 @@ declare module '@deepseek-ai/cordis' {
 /** Required services: the wire handle and Client Typert registry. */
 export const inject = ['connection', 'typert', 'remote', 'remote.commands']
 
-/** Mounts the browser runtime services and connection stream.
- * @param ctx - Client Cordis context.
+/**
+ * 挂载客户端运行时服务和连接流；父插件仅在 SlotRegistry 可用后完成激活。
+ * @param ctx - 客户端 Cordis 上下文。
+ * @returns 所有基础服务完成挂载后解决。
  */
-export function apply(ctx: Context): void {
-  ctx.plugin(SlotRegistry)
+export async function apply(ctx: Context): Promise<void> {
+  // SlotRegistry 是后续 UI 插件的基础服务，必须纳入父 Fiber 的启动结算。
+  await ctx.plugin(SlotRegistry)
   const conversation = {
     events: new ConversationEventRegistry(ctx),
     views: new ConversationViewRegistry(ctx),

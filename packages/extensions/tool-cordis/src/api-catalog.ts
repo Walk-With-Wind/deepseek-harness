@@ -459,20 +459,26 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   },
   {
     key: 'clientModules',
-    summary: 'The web plugin table service: incremental `dsh.client` scan + wire composition + bundle route + index tap.',
-    description: 'The web plugin table service: incremental `dsh.client` scan + wire composition + bundle route + index tap. Construction runs the activation scan synchronously — a malformed declaration or missing bundle among the already-loaded entries aggregates into one loud throw (FAILED fiber; the boot activation audit reports it).',
+    summary: 'The GUI client-module registry: incremental `dsh.client` scan, boot-graph composition, and trusted resource-manifest projection.',
+    description: 'The GUI client-module registry: incremental `dsh.client` scan, boot-graph composition, and trusted resource-manifest projection. Construction runs the activation scan synchronously — a malformed declaration or missing bundle among the already-loaded entries aggregates into one loud throw (FAILED fiber; the boot activation audit reports it).',
     methods: [
       {
         signature: 'graph(): WebBootGraph',
-        description: 'Current composed entry graph (stable object between changes).',
+        description: 'Return the current composed entry graph, stable between changes.',
         parameters: [],
-        returns: 'the graph served as `window.__DSH_BOOT__`.',
+        returns: 'The graph passed to the GUI product shell.',
       },
       {
         signature: 'clientPath(id: string): string | undefined',
         description: 'Absolute path of an entry\'s client bundle.',
         parameters: [{ name: 'id', description: 'entry id (package name).' }],
         returns: 'the path, or undefined for an unknown id.',
+      },
+      {
+        signature: 'resourceManifest(): ClientResourceManifest',
+        description: 'Project the read-only resource map sent to Desktop Main; Renderer receives only opaque URLs from graph.',
+        parameters: [],
+        returns: 'Trusted bundle paths for the current graph generation.',
       },
       {
         signature: 'rebuilt(id: string): string | undefined',
@@ -804,6 +810,28 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Create one Goal through the remote boundary.',
         parameters: [{ name: 'agent', description: 'exact live Agent resolved from the wire identity.' }, { name: 'request', description: 'objective and optional round cap.' }],
         returns: 'the created Goal identity.',
+      },
+    ],
+  },
+  {
+    key: 'hostLease',
+    summary: '成功持有的 Host 租约。',
+    description: '成功持有的 Host 租约。',
+    methods: [
+      {
+        signature: 'readonly owner: HostLeaseOwnerSummary',
+        description: '当前 owner 的只读身份摘要。',
+        parameters: [],
+      },
+      {
+        signature: 'readonly address: string',
+        description: '用于诊断的 socket 或 named-pipe 地址。',
+        parameters: [],
+      },
+      {
+        signature: 'release(): Promise<void>',
+        description: '幂等关闭 listener，并在安全时清除自身平台端点。',
+        parameters: [],
       },
     ],
   },
@@ -2849,6 +2877,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface CancelOptions {\n    keepInbox?: boolean | undefined;\n}',
   },
   {
+    name: 'ClientResourceEntry',
+    declaration: 'export interface ClientResourceEntry {\n    readonly id: string;\n    readonly rev: string;\n    readonly urlPath: string;\n    readonly sourcePath: string;\n    readonly sourceMapPath: string;\n}',
+  },
+  {
+    name: 'ClientResourceManifest',
+    declaration: 'export interface ClientResourceManifest {\n    readonly version: typeof CLIENT_RESOURCE_MANIFEST_VERSION;\n    readonly rev: string;\n    readonly resources: readonly ClientResourceEntry[];\n}',
+  },
+  {
     name: 'ClientResponse',
     declaration: 'export interface ClientResponse {\n    type: \'client-response\';\n    rpcId: RpcId;\n    result: RpcResult<unknown>;\n}',
   },
@@ -3251,6 +3287,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GoalView',
     declaration: 'export interface GoalView extends GoalSnapshot {\n    readonly roundsStarted: number;\n    readonly createdAt: number;\n    readonly updatedAt: number;\n    readonly activation: GoalActivation;\n}',
+  },
+  {
+    name: 'HostLeaseOwnerSummary',
+    declaration: 'export interface HostLeaseOwnerSummary {\n    readonly kind: \'cli\' | \'web\' | \'desktop\';\n    readonly version: string;\n    readonly pid: number;\n    readonly startedAt: string;\n    readonly nonceDigest: string;\n}',
   },
   {
     name: 'ImageAttachmentLimits',

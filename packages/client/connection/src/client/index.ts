@@ -1,20 +1,48 @@
 /**
- * Browser wire client. The plugin selects fixture or HTTP transport, provides
- * the shared API client, and lets the runtime object layer start the stream
- * controller with its sinks.
+ * GUI 连接插件。产品入口注入载体，本插件提供共享 API 客户端，并由运行时对象层在接收器就绪后
+ * 启动连接控制器。测试清单仍可显式选择无网络 fixture 客户端。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { HostDescription, IApiClient } from './api.ts'
 import { ConnectionController, type ConnectionConfig, type ConnectionSinks, type ConnectionState } from './connection.ts'
 import { FixtureApiClient } from './fixture.ts'
-import { WebApiClient } from './web-api-client.ts'
-import { createWebConnectionRpc } from './rpc.ts'
-import { isLoopbackHostname } from '../loopback-hostname.ts'
+import { CarrierApiClient, type ClientCarrier } from './carrier.ts'
+import { createConnectionRpc } from './rpc.ts'
 import type { ClientConnectionRpc } from '../rpc.ts'
+export {
+  CarrierApiClient,
+  type ClientCarrier,
+  type ClientCarrierAuthority,
+  type DownlinkKind,
+} from './carrier.ts'
+export { createConnectionRpc, createWebConnectionRpc } from './rpc.ts'
+export { WebClientCarrier, type WebClientCarrierOptions } from './web-carrier.ts'
+export { IpcApiClient } from './ipc-api-client.ts'
+export {
+  IPC_DATA_PROTOCOL_VERSION,
+  IPC_DEFAULT_MAX_IN_FLIGHT_REQUESTS,
+  IPC_DEFAULT_MAX_REQUEST_BODY_BYTES,
+  IPC_MAX_CHUNK_BYTES,
+  IPC_MAX_HEADER_BYTES,
+  IpcClientCarrier,
+  IpcHostBridge,
+  IpcTransportError,
+  errorFromFailure,
+  ipcDataFrameSchema,
+  type IpcClientCarrierOptions,
+  type IpcDataFrame,
+  type IpcFailureCode,
+  type IpcFailureFrame,
+  type IpcHostBridgeOptions,
+  type IpcHostDispatch,
+  type IpcHostDispatchContext,
+  type IpcMessagePort,
+} from './ipc/index.ts'
 
-// ---- Contract re-exports (browser-safe apiproxy channels + core types) ----
+// 重新导出可在 GUI 进程安全使用的 apiproxy 协议与核心类型。
 export type {
-  ApiProxy, SessionsApi, SessionSearchItem, SessionSummary, PromptContentPart, HostApi, EventsApi, MuxFrame, HostFrame,
+  ApiProxy, SessionsApi, SessionSearchItem, SessionSummary, PromptContentPart,
+  HostApi, EventsApi, MuxFrame, HostFrame,
   ApprovalResponsePayload, QuestionResponsePayload, HistoryEntry, ToolEventView,
   DirectoryEntry, DirectoryListing,
   ToolCallView, ToolResultView, WorkspaceApi, WorkspaceId, WorkspaceView,
@@ -36,21 +64,27 @@ export {
   transportError,
 } from './api.ts'
 
-// Connection loop types are public through ConnectionHandle.start; the
-// controller remains package-internal.
+// 连接循环类型通过 ConnectionHandle.start 公开，控制器实现仍保留在包内。
 export type { ConnectionConfig, ConnectionSinks, ConnectionState }
 export type { ClientConnectionRpc } from '../rpc.ts'
 
-/** Observable Host description published by each completed connection handshake. */
+/** 每次连接握手完成后发布的可观察 Host 描述。 */
 export interface HostDescriptionSource {
-  /** Latest connected-generation description; absent before connect and while reconnecting. */
+  /** 当前连接代的最新描述；连接前和重连期间为空。 */
   getSnapshot(): HostDescription | undefined
-  /** Subscribe to description replacement and connection loss. */
+  /** 订阅描述替换与连接丢失。 */
   subscribe(listener: () => void): () => void
 }
 
-/** Required services (none — this is the wire root). */
-export const inject: string[] = []
+/** 产品入口必须先提供客户端载体。 */
+export const inject = ['clientCarrier']
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** 产品入口在插件图启动前提供的客户端载体。 */
+    clientCarrier: ClientCarrier
+  }
+}
 
 /**
  * The ctx.connection service API: the API client plus a one-shot
@@ -78,15 +112,17 @@ export interface ConnectionHandle {
 }
 
 /**
- * Client plugin body: pick the api by page mode and provide ctx.connection.
- * @param ctx - client cordis context.
+ * 客户端插件：消费产品入口注入的载体，并提供 `ctx.connection`。
+ * @param ctx - 客户端 Cordis 上下文。
  */
 export function apply(ctx: Context): void {
   const pageLocation = typeof location === 'undefined' ? undefined : location
   const fixture = pageLocation !== undefined && new URLSearchParams(pageLocation.search).has('fixture')
   const fixtureClient = fixture ? new FixtureApiClient() : undefined
-  const api: IApiClient = fixtureClient ?? new WebApiClient()
-  const rpc = fixtureClient?.rpc ?? createWebConnectionRpc()
+  const carrier = ctx.clientCarrier
+  const api: IApiClient = fixtureClient ?? new CarrierApiClient(carrier)
+  const rpc = fixtureClient?.rpc
+    ?? createConnectionRpc(carrier.fetch.bind(carrier), carrier.baseUrl)
   let started = false
   let description: HostDescription | undefined
   const descriptionListeners = new Set<() => void>()
@@ -103,7 +139,7 @@ export function apply(ctx: Context): void {
   }
   const handle: ConnectionHandle = {
     api,
-    isLoopback: pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
+    isLoopback: carrier.authority === 'local',
     hostDescription: {
       getSnapshot: () => description,
       subscribe: (listener) => {

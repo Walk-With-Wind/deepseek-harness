@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-供 app bin（[`dsh`](../../../apps/cli/README.md) 与 [`dsh-acp-demo`](../../examples/acp-demo/README.md)）共用的启动粘合层：每个 bin 都是在这些辅助函数之上构建的精简自执行组合，并以自身诊断前缀参数化。这样，Loader 故障行为只由一处负责，不会在已发布产物之间逐渐分化。
+供应用入口（[`dsh`](../../../apps/cli/README.md)、[`dsh-acp-demo`](../../examples/acp-demo/README.md)与 [Desktop Utility](../../../apps/desktop/README.md)）共用的启动粘合层：每个入口都是这些辅助函数之上的精简进程 adapter，并以自身诊断前缀参数化。这样，profile、租约与 Loader 故障行为都只有一个所有者，不会在产品之间逐渐分化。
 
 | 导出 | 职责 |
 |---|---|
@@ -18,6 +18,8 @@
 | `mountRootInclude(ctx, absoluteConfigPath, patches?, bareModuleBaseUrl?)` | 注册静态导入的 `cordis:include` 与 `cordis:group` builtin，挂载 include，并保留用户 patch 层 HMR（热模块替换）使用的确切根配置项；可选模块基准会把裸包名锚定到已安装宿主，而相对名称仍以配置目录为基准 |
 | `watchUserPatches(ctx, options)` | 向现有 Cordis HMR 服务注册指名的 patch 文件；每次新增、变更或移除都会通过调用方的 `compose` 闭包（应用自有层围绕当前用户层）以事务方式重新组合完整 patch 列表，并返回异步 disposer |
 | `resolveProfileDir` / `initProfile` / `loadProfile` / `readProfileManifest` / `writeProfileManifest` / `resolveBundleDir` / `composeEntries` / `healProfilesModuleFallback` / `PROFILE_TEMPLATES` / `DEFAULT_PROFILE_BUNDLES` / `PROFILES_DIR` / `PROFILE_PATCH_FILENAME` | Profile 机制（见 [Profile](#profiles)） |
+| `prepareProfileRuntime` / `bootProfileRuntime` / `homeProfilePatchPath` / `PROFILE_ROOT_FILENAME` | 与进程无关的 profile 准备与 Host 启动：组合 bundle／用户／产品层，在业务插件前取得 Host 租约并以 `ctx.hostLease` 暴露，挂载／安定配置树，并可选地保持两份用户 patch 文件实时生效 |
+| `canonicalizeHostHome` / `hostLeaseAddress` / `acquireHostLease` / `HostLeaseError` | 每个规范化 Harness home 的跨产品独占 Host 租约（见 [Host 租约](#host-lease)） |
 | `boot(binName, absoluteConfigPath, patches?, prepare?, bareModuleBaseUrl?)` | 创建根上下文，向 Loader `!!js` 配置表达式暴露 `dshHomePath(...segments)` 并安装 Loader，在配置树条目挂载前执行可选的宿主准备操作（`prepare` 可以使用 Loader，也可以提供由启动器拥有的上下文插槽），再挂载并等待 include 树结算，断言所有条目均已加载并激活，最后返回根上下文——失败时 dispose（资源释放）部分构造的上下文，并以带标签的错误 reject；可选模块基准与 `mountRootInclude` 的解析语义相同 |
 | `renderConfigDump(binName, absoluteConfigPath, layers, warn?)` | 使用 include 自己的解析器和补丁算法（`entryListSchema`/`applyEntryPatches`）离线合成基础配置与带标签的覆盖层，使结果与 `boot()` 挂载的内容一致，再渲染为 YAML，并原样保留 `!!js` 表达式；每段来源于同一文件且由相同补丁层修改的连续行之前都有一条 `# ==` 注释，标明该文件和这些补丁层，输出仍是一份可加载的文档；未匹配到行的补丁连同其层标签交给 `warn`（默认：一行 stderr），读取、解析或字段验证失败则抛出 |
 | `addHarnessSourceSection(ctx, sourceRoot)` | 添加全局 `harness:source` 提示词段落（顺序紧随 harness 身份、位于 persona 之前），告知 agent（智能体）DSH 实现代码 checkout 的磁盘路径，同时提醒它不得据此推断当前工作目录，而应使用 `pwd`；如果已启动树没有此项服务，则不执行操作并返回 `undefined`。这里的服务是 `systemPrompt`；该段落注册到它的 fiber，因此开发环境 HMR 重新加载系统提示词后，它会消失直至下次启动 |
@@ -29,7 +31,7 @@ Loader 并发挂载各个条目，因此当其他环节失败时，某个界面�
 
 `cordis:group` 与 `cordis:include` 一并注册，使一份组装能把一个提供方与它的消费方放进同一个 `isolate` realm。两者都通过宿主的模块管线加载，而非被包含树自身的说明符解析，这正是让本工作区之外的组装——放在 harness home 下的 agent preset——能够使用 group 行的原因。
 
-配置中的裸插件 specifier（`@deepseek-ai/dsh-*`、npm 包）通过 Cordis Loader 的内部模块 loader 解析。默认情况下，它们从配置目录解析；封闭运行时会向 `boot` 或 `mountRootInclude` 传入 `bareModuleBaseUrl`，使已安装包树保持权威，即使配置位于另一个 Node 项目中也不受遮蔽。相对 specifier 始终以配置目录为基准解析。仓库 bin 会安装 Loader 的可选对等依赖（peer dependency） `node-addon-require-builtin`；外部调用方必须提供该组件，或者把插件安装到普通 Node import 解析可以找到的位置。构建后的 `dsh-app-boot` 产物内嵌静态挂载的 Include 实现，但仍将 Loader 保持为外部依赖，因此 include 树与宿主会绑定到同一个 Loader peer。`pnpm dsh` 源码路径还会将 manifest（元数据清单）声明的 workspace 包映射到其 TypeScript 源码；其配置门禁要求每个随附的原始／Web 裸插件都出现在解析所用 manifest 的 `dependencies` 中。
+配置中的裸插件 specifier（`@deepseek-ai/dsh-*`、npm 包）默认从配置目录解析。封闭运行时会向 `boot` 或 `mountRootInclude` 传入 `bareModuleBaseUrl`；app-boot 首先从该宿主入口执行 Node 包解析，完整支持 package `exports` 与包自引用，仅在宿主没有直接拥有该包时才回退到 profile 根。这个双锚点规则既保证宿主自有适配器不会被 profile 同名包遮蔽，也保留组合包依赖闭包与 profile 自行安装的插件。相对 specifier 始终以配置目录为基准解析。构建后的 `dsh-app-boot` 产物内嵌静态挂载的 Include 实现，但仍将 Loader 保持为外部依赖，因此 include 树与宿主会绑定到同一个 Loader peer。`pnpm dsh` 源码路径还会将 manifest（元数据清单）声明的 workspace 包映射到其 TypeScript 源码；其配置门禁要求每个随附的原始／Web 裸插件都出现在解析所用 manifest 的 `dependencies` 中。
 
 此包不包含 loader 钩子，也不提供开发模式接口。[`dsh` 应用](../../../apps/cli/README.md) 持有自己的 Node 源码启动钩子，并在启动序列中使用这些 helper；构建后的消费方仍使用普通 Node 包解析。
 
@@ -43,6 +45,14 @@ profile 是位于 `$DSH_HOME/profiles/<name>` 下的目录（harness home 由 [`
 - **`cordis.patch.yml`**（home 级）与 **`profiles/<name>/cordis.patch.yml`**：用户 patch 层，应用在所有组合包层之后（先应用逐 profile 的文件，再应用 home 级文件，因此后者优先级更高）：按 id 定位的 patch 会替换对应条目的整个 `config`（未改字段也要重述），`insert` 会添加条目，`!!js` 表达式则在挂载时插值。如果 patch 指定的条目 id 不在组合后的树中，则输出一条 stderr 警告。空文件或仅含注释的文件会抛出异常（其解析结果为空，而不是列表）；如需禁用该层，请使用 `[]`。
 
 每次 profile 启动都由 `watchUserPatches` 持续应用 `cordis.patch.yml` 的变更（一次性 surface 经由有界关闭 dispose 监视器）。即使该文件或其直接父目录不存在，监视器仍会监视确切路径；它会串行处理突发变更，并按调用方的层次顺序重新组合用户 patch（组合包层在下、overlay 在上）。读取失败、解析失败或 Loader 候选被拒时，最后一个可用树会继续运行；HMR 服务记录错误后广播 `hmr/config-update-failed(filename, Error)`，并隔离观察方的失败。上下文 dispose 时会关闭 watcher，并等待进行中的刷新结束。
+
+<a id="host-lease"></a>
+
+## Host 租约
+
+`bootProfileRuntime` 会在准备或挂载业务插件之前取得规范化 `DSH_HOME` 的租约，并把租约释放登记为根上下文最早的 teardown effect。CLI、Web 与 Desktop Utility 使用同一原语，因此能写入共享设置、凭据、会话与存储的进程中恰有一个成为 Host owner；应用级 single-instance lock 不能替代它。冲突只报告稳定 code 和脱敏 owner 摘要，不暴露 home 路径。
+
+在 POSIX 上，listener 是 owner-only 真实目录内的 Unix socket；home 路径过长时使用 owner-only 短 alias，且其真实目标必须等于该目录。只有同时满足 address-in-use、owner probe 失败、父目录私有、endpoint 为 socket、device／inode 身份未改变时才会回收；普通文件、endpoint 处的链接和已变化 socket 永远不会被删除。在 Windows 上，租约是具有显式 DACL 的 named pipe，只允许当前用户 SID，并拒绝 network／world；live 或含混 pipe 不会被回收。`release()` 可幂等调用，并且只移除当前租约自己持有的 endpoint 身份。
 
 ## 模型体验
 
@@ -58,3 +68,4 @@ profile 是位于 `$DSH_HOME/profiles/<name>` 下的目录（harness home 由 [`
 - **快照回放替换仅识别特定 basename**：只有以 `cordis.yml` 或 `cordis.yaml` 结尾的配置会映射到同级 `cordis.snapshot.yml`；自定义配置名称需要调用方自行选择。
 - **环境发现以启动为界**：`loadLayeredEnv` 只读取一次调用目录与 harness home 中的 `.env`；它不搜索父目录，也不跟随之后选择的 workspace。`loadEnv` 仍是非产品 bin 使用的单目录 helper。
 - **用户 patch 会替换匹配到的整个配置**：按 id 定位的 patch 不做深度合并，因此 profile 覆盖必须重述需要保留的组合包字段。
+- **一个规范化 home 只允许一个 Host**：应使用不同 `DSH_HOME` 启动另一产品，或停止当前 owner；调用方不得绕过或删除租约 endpoint。

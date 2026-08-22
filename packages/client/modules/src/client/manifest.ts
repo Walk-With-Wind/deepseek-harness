@@ -209,6 +209,16 @@ export interface ClientModuleCreateOptions {
   loadBundle?: (url: string) => Promise<void>
 }
 
+/** Trusted, already-parsed inputs used by non-Web GUI products. */
+export interface ClientModuleManifestOptions {
+  /** Validated boot manifest supplied by the product protocol. */
+  manifest: BootManifest
+  /** Module-table seed: platform-singleton specifier → shell instance. */
+  staticModules: Record<string, unknown>
+  /** Bundle-load hook. Defaults to a same-origin classic `<script src>` element. */
+  loadBundle?: (url: string) => Promise<void>
+}
+
 /** The modules bundle after its factory has been materialized by the HTML bootstrap facade. */
 export interface ClientBootstrapModule {
   /** Graph/module id carried by the modules bundle registration. */

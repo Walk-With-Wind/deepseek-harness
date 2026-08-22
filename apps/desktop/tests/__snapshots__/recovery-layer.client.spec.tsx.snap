@@ -1,0 +1,803 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Desktop recovery and update presentation > 固定 'CHECKING' 更新提示的非阻塞呈现 1`] = `
+<div>
+  <aside
+    aria-live="polite"
+    class="_updateNotice_626cfd"
+  >
+    <span
+      aria-hidden="true"
+      class="_updateMark_626cfd"
+    />
+    <div
+      class="_updateCopy_626cfd"
+    >
+      <strong>
+        正在检查更新
+      </strong>
+      <span>
+        正在读取已签名发行通道。
+      </span>
+    </div>
+  </aside>
+</div>
+`;
+
+exports[`Desktop recovery and update presentation > 固定 'DOWNLOADING' 更新提示的非阻塞呈现 1`] = `
+<div>
+  <aside
+    aria-live="polite"
+    class="_updateNotice_626cfd"
+  >
+    <span
+      aria-hidden="true"
+      class="_updateMark_626cfd"
+    />
+    <div
+      class="_updateCopy_626cfd"
+    >
+      <strong>
+        正在下载 0.1.0-rc.6
+      </strong>
+      <span>
+        手动检查已授权平台下载；下载完成后会在下次正常启动时应用。
+      </span>
+    </div>
+  </aside>
+</div>
+`;
+
+exports[`Desktop recovery and update presentation > 固定 'ERROR' 更新提示的非阻塞呈现 1`] = `
+<div>
+  <aside
+    aria-live="polite"
+    class="_updateNotice_626cfd"
+  >
+    <span
+      aria-hidden="true"
+      class="_updateMark_626cfd"
+    />
+    <div
+      class="_updateCopy_626cfd"
+    >
+      <strong>
+        更新检查未完成
+      </strong>
+      <span>
+        暂时无法完成更新检查，请稍后重试。
+      </span>
+    </div>
+    <button
+      class="_updateAction_626cfd"
+      type="button"
+    >
+      重试
+    </button>
+  </aside>
+</div>
+`;
+
+exports[`Desktop recovery and update presentation > 固定 'READY' 更新提示的非阻塞呈现 1`] = `
+<div>
+  <aside
+    aria-live="polite"
+    class="_updateNotice_626cfd"
+  >
+    <span
+      aria-hidden="true"
+      class="_updateMark_626cfd"
+    />
+    <div
+      class="_updateCopy_626cfd"
+    >
+      <strong>
+        0.1.0-rc.6 已准备就绪
+      </strong>
+      <span>
+        更新会在下次正常启动时应用；也可先安全排空本地 Host 后立即重启。
+      </span>
+    </div>
+    <button
+      class="_updateAction_626cfd"
+      type="button"
+    >
+      立即重启完成更新
+    </button>
+  </aside>
+</div>
+`;
+
+exports[`Desktop recovery and update presentation > 固定 { phase: 'CIRCUIT_OPEN', generation: 4, code: 'HOST_RESTART_BUDGET_EXHAUSTED', message: '自动恢复已暂停。' } 恢复层的语义和可见文案 1`] = `
+<div>
+  <section
+    aria-busy="false"
+    aria-live="polite"
+    class="_layer_626cfd"
+  >
+    <div
+      class="_panel_626cfd"
+    >
+      <p
+        class="_eyebrow_626cfd"
+      >
+        DeepSeek Harness Community Build
+      </p>
+      <h1
+        class="_title_626cfd"
+      >
+        自动恢复已暂停
+      </h1>
+      <p
+        class="_summary_626cfd"
+      >
+        短时间内连续失败，已停止自动重启以避免振荡。
+      </p>
+      <ol
+        aria-label="运行时启动轨迹"
+        class="_trace_626cfd"
+      >
+        <li
+          class="_step_626cfd _complete_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            桌面宿主
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            verified
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _failed_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            Utility Host
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            gen 4
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _pending_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            安全数据通道
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            circuit_open
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _pending_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            产品界面
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            waiting
+          </span>
+        </li>
+      </ol>
+      <p
+        class="_detail_626cfd"
+      >
+        HOST_RESTART_BUDGET_EXHAUSTED: 自动恢复已暂停。
+      </p>
+      <div
+        class="_actions_626cfd"
+      >
+        <button
+          class="_retry_626cfd"
+          type="button"
+        >
+          重新启动运行时
+        </button>
+        <button
+          class="_secondaryAction_626cfd"
+          type="button"
+        >
+          导出诊断包
+        </button>
+        <span
+          class="_generation_626cfd"
+        >
+          generation 4
+        </span>
+      </div>
+    </div>
+  </section>
+</div>
+`;
+
+exports[`Desktop recovery and update presentation > 固定 { phase: 'DEGRADED', generation: 4 } 恢复层的语义和可见文案 1`] = `
+<div>
+  <section
+    aria-busy="true"
+    aria-live="polite"
+    class="_layer_626cfd"
+  >
+    <div
+      class="_panel_626cfd"
+    >
+      <p
+        class="_eyebrow_626cfd"
+      >
+        DeepSeek Harness Community Build
+      </p>
+      <h1
+        class="_title_626cfd"
+      >
+        连接暂时不可用
+      </h1>
+      <p
+        class="_summary_626cfd"
+      >
+        已停止提交新请求，正在确认当前代际状态。
+      </p>
+      <ol
+        aria-label="运行时启动轨迹"
+        class="_trace_626cfd"
+      >
+        <li
+          class="_step_626cfd _complete_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            桌面宿主
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            verified
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _complete_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            Utility Host
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            gen 4
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _active_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            安全数据通道
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            degraded
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _pending_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            产品界面
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            waiting
+          </span>
+        </li>
+      </ol>
+    </div>
+  </section>
+</div>
+`;
+
+exports[`Desktop recovery and update presentation > 固定 { phase: 'FAILED', generation: 4, code: 'HOST_LEASE_BUSY', message: '另一个 Harness Host 正在使用此 home。' } 恢复层的语义和可见文案 1`] = `
+<div>
+  <section
+    aria-busy="false"
+    aria-live="polite"
+    class="_layer_626cfd"
+  >
+    <div
+      class="_panel_626cfd"
+    >
+      <p
+        class="_eyebrow_626cfd"
+      >
+        DeepSeek Harness Community Build
+      </p>
+      <h1
+        class="_title_626cfd"
+      >
+        运行时启动失败
+      </h1>
+      <p
+        class="_summary_626cfd"
+      >
+        当前代际已安全停止。你可以检查提示后重新尝试。
+      </p>
+      <ol
+        aria-label="运行时启动轨迹"
+        class="_trace_626cfd"
+      >
+        <li
+          class="_step_626cfd _complete_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            桌面宿主
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            verified
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _failed_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            Utility Host
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            gen 4
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _pending_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            安全数据通道
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            failed
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _pending_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            产品界面
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            waiting
+          </span>
+        </li>
+      </ol>
+      <p
+        class="_detail_626cfd"
+      >
+        HOST_LEASE_BUSY: 另一个 Harness Host 正在使用此 home。
+      </p>
+      <div
+        class="_actions_626cfd"
+      >
+        <button
+          class="_retry_626cfd"
+          type="button"
+        >
+          重新启动运行时
+        </button>
+        <button
+          class="_secondaryAction_626cfd"
+          type="button"
+        >
+          导出诊断包
+        </button>
+        <span
+          class="_generation_626cfd"
+        >
+          generation 4
+        </span>
+      </div>
+    </div>
+  </section>
+</div>
+`;
+
+exports[`Desktop recovery and update presentation > 固定 { phase: 'RECOVERING', generation: 4 } 恢复层的语义和可见文案 1`] = `
+<div>
+  <section
+    aria-busy="true"
+    aria-live="polite"
+    class="_layer_626cfd"
+  >
+    <div
+      class="_panel_626cfd"
+    >
+      <p
+        class="_eyebrow_626cfd"
+      >
+        DeepSeek Harness Community Build
+      </p>
+      <h1
+        class="_title_626cfd"
+      >
+        正在恢复运行时
+      </h1>
+      <p
+        class="_summary_626cfd"
+      >
+        失效代际已隔离；恢复不会自动重放结果未知的请求。
+      </p>
+      <ol
+        aria-label="运行时启动轨迹"
+        class="_trace_626cfd"
+      >
+        <li
+          class="_step_626cfd _complete_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            桌面宿主
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            verified
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _complete_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            Utility Host
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            gen 4
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _active_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            安全数据通道
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            recovering
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _pending_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            产品界面
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            waiting
+          </span>
+        </li>
+      </ol>
+    </div>
+  </section>
+</div>
+`;
+
+exports[`Desktop recovery and update presentation > 固定 { phase: 'STARTING', generation: 4 } 恢复层的语义和可见文案 1`] = `
+<div>
+  <section
+    aria-busy="true"
+    aria-live="polite"
+    class="_layer_626cfd"
+  >
+    <div
+      class="_panel_626cfd"
+    >
+      <p
+        class="_eyebrow_626cfd"
+      >
+        DeepSeek Harness Community Build
+      </p>
+      <h1
+        class="_title_626cfd"
+      >
+        正在建立本地运行时
+      </h1>
+      <p
+        class="_summary_626cfd"
+      >
+        正在校验配置并启动隔离的 Utility Host。
+      </p>
+      <ol
+        aria-label="运行时启动轨迹"
+        class="_trace_626cfd"
+      >
+        <li
+          class="_step_626cfd _complete_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            桌面宿主
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            verified
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _active_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            Utility Host
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            gen 4
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _pending_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            安全数据通道
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            starting
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _pending_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            产品界面
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            waiting
+          </span>
+        </li>
+      </ol>
+    </div>
+  </section>
+</div>
+`;
+
+exports[`Desktop recovery and update presentation > 固定 { phase: 'STOPPING', generation: 4 } 恢复层的语义和可见文案 1`] = `
+<div>
+  <section
+    aria-busy="true"
+    aria-live="polite"
+    class="_layer_626cfd"
+  >
+    <div
+      class="_panel_626cfd"
+    >
+      <p
+        class="_eyebrow_626cfd"
+      >
+        DeepSeek Harness Community Build
+      </p>
+      <h1
+        class="_title_626cfd"
+      >
+        正在安全退出
+      </h1>
+      <p
+        class="_summary_626cfd"
+      >
+        正在排空请求、释放资源并关闭本地 Host。
+      </p>
+      <ol
+        aria-label="运行时启动轨迹"
+        class="_trace_626cfd"
+      >
+        <li
+          class="_step_626cfd _complete_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            桌面宿主
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            verified
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _complete_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            Utility Host
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            gen 4
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _complete_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            安全数据通道
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            stopping
+          </span>
+        </li>
+        <li
+          class="_step_626cfd _pending_626cfd"
+        >
+          <span
+            aria-hidden="true"
+            class="_dot_626cfd"
+          />
+          <span
+            class="_stepLabel_626cfd"
+          >
+            产品界面
+          </span>
+          <span
+            class="_stepMeta_626cfd"
+          >
+            waiting
+          </span>
+        </li>
+      </ol>
+    </div>
+  </section>
+</div>
+`;

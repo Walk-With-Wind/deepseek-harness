@@ -15,6 +15,7 @@
 
 import type { IncomingHttpHeaders } from 'node:http'
 import { isLoopbackHostname } from './loopback-hostname.ts'
+import type { HostDispatchAuthority } from './rpc.ts'
 
 /** The request facts the fence reads from either HTTP representation. */
 interface ApiTrustRequest {
@@ -120,4 +121,20 @@ export function isTrustedApiRequest(request: ApiTrustRequest, trustedHosts: read
   } catch {
     return false
   }
+}
+
+/**
+ * 把通过 Web 信任栅栏的请求归类为 Host core authority；未通过时返回 remote-untrusted。
+ * @param request - Node HTTP 或标准 Fetch header 事实。
+ * @param trustedHosts - Web 部署允许的非 loopback authority。
+ * @returns 不可由 Renderer header 提升的显式权限来源。
+ */
+export function classifyApiRequest(
+  request: ApiTrustRequest,
+  trustedHosts: readonly string[],
+): HostDispatchAuthority {
+  if (!isTrustedApiRequest(request, trustedHosts)) return 'remote-untrusted'
+  const host = header(request.headers, 'host')
+  const parsed = host === undefined ? undefined : parseAuthority(host)
+  return parsed !== undefined && isLoopbackHostname(parsed.hostname) ? 'local' : 'remote-trusted'
 }

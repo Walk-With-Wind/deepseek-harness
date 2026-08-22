@@ -1,0 +1,26 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types-host",
+    "types": ["node", "electron"]
+  },
+  "include": [
+    "src/main",
+    "src/host",
+    "src/preload",
+    "src/shared",
+    "src/utility"
+  ],
+  "references": [
+    { "path": "../../vendor/cordis" },
+    { "path": "../../packages/boot/app-boot" },
+    { "path": "../../packages/bundle/gui-app" },
+    { "path": "../../packages/client/connection/tsconfig.host.json" },
+    { "path": "../../packages/client/modules" },
+    { "path": "../../packages/host/apiproxy" },
+    { "path": "../../packages/host/directory-picker" },
+    { "path": "../../packages/util/home-paths" },
+    { "path": "../../packages/workspace/workspace" }
+  ]
+}

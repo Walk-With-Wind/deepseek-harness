@@ -2,7 +2,9 @@
 
 [English](README.md) | 中文
 
-客户端模块系统：Node 内部 ESM loader 的浏览器端对等实现，以惰性 CJS 表实现。web 外壳挂载 vendored cordis Loader 来治理配置项（fiber 生命周期、inject 等待、update/refresh），并通过其 `internal` 约定注入该包的 `ClientModuleLoader`；vendored 一侧唯一的消费点是 `EntryTree.import`，因此替换 `internal` 恰好只会替换「插件代码如何到达」，不会改变其他内容。
+客户端模块系统由与传输无关的 Host registry、Web 资源 adapter 和惰性 CJS 客户端表组成。`ClientModuleRegistry` 扫描 Host Loader 中的 `dsh.client` 包，校验其构建后的 `./client` 导出，组合启动图，并向产品 adapter 暴露不可变资源 manifest。只有 `/web` 入口持有 WebServer bundle route 与 HTML manifest 注入。Desktop 把严格资源 manifest 转交给 Main，将其中可信源路径映射为 `app://` 资源，并把产品自有 bundle loader 传给同一客户端表。静态外壳导入浏览器 ESM `./bootstrap` 表层；`./client` 表层仍是 Loader registration bundle，二者闭包引用同一套模块系统实现。
+
+GUI 外壳挂载 vendored cordis Loader 来治理配置项（fiber 生命周期、inject 等待、update/refresh），并通过其 `internal` 约定注入该包的 `ClientModuleLoader`。vendored 一侧唯一的消费点是 `EntryTree.import`，因此替换 `internal` 恰好只会改变插件代码如何到达，不会改变其他内容。
 
 惰性 CJS 模型（web2）：执行插件 bundle 只会注册其 factory（`window.__ModuleLoader__.load({id, factory})`）；每个模块主体的副作用（包括 CSS 注入）都位于 factory 闭包中，在物化时运行（`factory(require)` → 导出表层，并在 `loadCache` 中记忆化），不会在脚本执行时运行。如果 factory 依赖另一个已注册但尚未物化的模块，系统会递归物化它；图组合会把声明的动态请求提供方放在消费者之前，而 require 循环会抛出异常，因为 factory 形式的 CJS 无法提供部分导出。`<id>/client` 与裸 id 指向同一表层（一个插件 bundle 就是其包的客户端侧）。
 
@@ -16,7 +18,7 @@ Node 侧会扫描已启用的 Loader 配置项以发现 web `dsh.client` 包，�
 
 ## 模型体验
 
-无。模块 loader 属于浏览器侧内核机制；这里没有任何内容进入模型请求。
+无。模块 loader 属于 GUI 内核机制；这里没有任何内容进入模型请求。
 
 #### KV Cache 影响
 

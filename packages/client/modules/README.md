@@ -2,7 +2,9 @@
 
 English | [中文](README.zh.md)
 
-Client module system: the browser peer of Node's internal ESM loader, built as a lazy CJS table. The web shell mounts the vendored cordis Loader for entry governance (fiber lifecycle, inject waiting, update/refresh) and injects this package's `ClientModuleLoader` through its `internal` contract — the vendored side's only consumption point is `EntryTree.import`, so replacing `internal` replaces exactly "how plugin code arrives" and nothing else.
+Client module system with a transport-neutral Host registry, a Web resource adapter, and a lazy CJS client table. `ClientModuleRegistry` scans the Host Loader for `dsh.client` packages, validates their built `./client` exports, composes the boot graph, and exposes an immutable resource manifest for product adapters. The `/web` entry alone owns the WebServer bundle route and HTML manifest injection. Desktop transfers the strict resource manifest to Main, maps its trusted source paths into `app://` resources, and passes a product-owned bundle loader to the same client table. Static shells import the browser ESM `./bootstrap` face; the `./client` face remains the Loader registration bundle, and both faces close over the same module-system implementation.
+
+The GUI shell mounts the vendored cordis Loader for entry governance (fiber lifecycle, inject waiting, update/refresh) and injects this package's `ClientModuleLoader` through its `internal` contract. The vendored side's only consumption point is `EntryTree.import`, so replacing `internal` changes exactly how plugin code arrives and nothing else.
 
 Lazy CJS model (web2): executing a plugin bundle only REGISTERS its factory (`window.__ModuleLoader__.load({id, factory})`); every module body side effect — CSS injection included — lives in the factory closure and runs at materialization (`factory(require)` → exports, memoized in `loadCache`), not at script execution. A factory that requires another registered-but-unmaterialized module materializes it recursively; graph composition places declared dynamic requests before their consumers, and require cycles throw because factory-form CJS cannot deliver partial exports. `<id>/client` and the bare id resolve to the same exports (a plugin bundle IS its package's client half).
 
@@ -16,7 +18,7 @@ The Node half scans enabled Loader entries for web `dsh.client` packages, resolv
 
 ## Model Experience
 
-None, as the module loader is browser-side kernel machinery; nothing here reaches a model request.
+None, as the module loader is GUI kernel machinery; nothing here reaches a model request.
 
 #### KV Cache effect
 
