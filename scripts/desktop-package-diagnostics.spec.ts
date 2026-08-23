@@ -1,7 +1,8 @@
 /** Desktop package OOM 诊断格式只暴露阶段、内存和文件统计。 */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   collectDesktopPackageInventory,
@@ -101,5 +102,18 @@ describe('Desktop package diagnostics', () => {
     expect(preload).toContain("'archive-write-complete'")
     expect(preload).toContain('writeFilesystem')
     expect(workflow).toContain("DSH_DESKTOP_PACKAGE_DIAGNOSTICS: ${{ matrix.platform == 'win32' && '1' || '0' }}")
+  })
+
+  it('Forge 清理 .bin 时把 Windows glob 限定在已复制应用目录', async () => {
+    const root = join(import.meta.dirname, '..')
+    const appRequire = createRequire(join(root, 'apps/desktop/package.json'))
+    const forgeCli = appRequire.resolve('@electron-forge/cli/dist/electron-forge.js')
+    const forgeRequire = createRequire(forgeCli)
+    const coreManifest = forgeRequire.resolve('@electron-forge/core/package.json')
+    const forgePackage = await readFile(join(dirname(coreManifest), 'dist/api/package.js'), 'utf8')
+    expect(forgePackage).toMatch(
+      /fast_glob_1\.default\)\('\*\*\/\.bin\/\*\*\/\*',\s*\{\s*cwd: buildPath,\s*absolute: true/,
+    )
+    expect(forgePackage).not.toContain("node_path_1.default.join(buildPath, '**/.bin/**/*')")
   })
 })

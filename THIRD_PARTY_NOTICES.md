@@ -94,8 +94,9 @@ External packages that a workspace package resolves at runtime. The tier covers 
 | [`zod`](https://github.com/colinhacks/zod) | MIT |
 | [`zustand`](https://github.com/pmndrs/zustand) | MIT |
 
-pnpm applies local patches to the following packages at install time, so shipped artifacts carry modified copies; each patch file is the complete record of the modification:
+pnpm applies local patches to the following packages at install time. Build tooling and shipped artifacts consume the modified copies selected by their dependency graphs; each patch file is the complete record of the modification:
 
+- `@electron-forge/core@7.11.2` — [`patches/@electron-forge__core@7.11.2.patch`](patches/@electron-forge__core@7.11.2.patch)
 - `node-pty@1.2.0-beta.15` — [`patches/node-pty@1.2.0-beta.15.patch`](patches/node-pty@1.2.0-beta.15.patch)
 
 ## Official Claude Code platform payloads

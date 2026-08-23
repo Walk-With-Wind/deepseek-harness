@@ -26,7 +26,7 @@ fork 的 GitHub Releases 使用上游 `dsh-v<version>` tag 族保存不可变的
 
 canary 是第一个允许发布的通道。stable 位于后续的最终版本 commit，所选 canary 属于同一版本线并且是其祖先。已跟踪的结构化验收记录要写明 reviewer、至少 24 小时观察期，以及三个目标的干净安装、上一版本到 canary、canary 到 stable 候选结果；其 hash 会保存在 stable Release manifest 中。stable 元数据同时写入 stable 与 canary 路径，使已安装 canary 客户端能够晋级。任何 workflow 都不会自动晋级 canary。回退只移动或移除 Pages 元数据，绝不修改带版本的 Release 资产。
 
-在诊断 run 到达全部五个打包检查点且最终签名候选通过前，Windows Forge 打包仍是未解决的原生发行门禁。显式开启的 JSONL 诊断会在 Forge 启动、复制完成、ASAR crawl 完成、insert 完成和 archive 写入完成时报告进程内存与聚合文件元数据；它不报告路径、内容、环境值或凭据。仅修改 heap 上限不能满足该门禁。
+[限定范围的 Forge bin 清理补丁](../../implemented/bug-fix/2026-08-23-forge-windows-bin-glob-scope.md)可防止 Windows 把仓库解释为已复制应用的搜索根目录。在应用该补丁的诊断 run 到达全部五个打包检查点且最终签名候选通过前，Windows 打包仍是原生发行门禁。显式开启的 JSONL 诊断会在 Forge 启动、复制完成、ASAR crawl 完成、insert 完成和 archive 写入完成时报告进程内存与聚合文件元数据；它不报告路径、内容、环境值或凭据。仅修改 heap 上限不能满足该门禁。
 
 ## 考虑过的替代方案
 

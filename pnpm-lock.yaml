@@ -10,6 +10,7 @@ overrides:
   '@electron/rebuild@^3.7.0': 4.2.0
 
 patchedDependencies:
+  '@electron-forge/core@7.11.2': 4db4858afb2bf4e4d50cdb38b7cd8aff72b4ac56383b8ffd49e184de67fc1eff
   node-pty@1.2.0-beta.15: b40ae545608897914bd25fb009c97eeac478c34e8a910298ddcb01b746534bb0
 
 importers:
@@ -17009,7 +17010,7 @@ snapshots:
 
   '@electron-forge/cli@7.11.2(esbuild@0.28.1)(lightningcss@1.32.0)':
     dependencies:
-      '@electron-forge/core': 7.11.2(esbuild@0.28.1)(lightningcss@1.32.0)
+      '@electron-forge/core': 7.11.2(patch_hash=4db4858afb2bf4e4d50cdb38b7cd8aff72b4ac56383b8ffd49e184de67fc1eff)(esbuild@0.28.1)(lightningcss@1.32.0)
       '@electron-forge/core-utils': 7.11.2
       '@electron-forge/shared-types': 7.11.2
       '@electron/get': 3.1.0
@@ -17054,7 +17055,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@electron-forge/core@7.11.2(esbuild@0.28.1)(lightningcss@1.32.0)':
+  '@electron-forge/core@7.11.2(patch_hash=4db4858afb2bf4e4d50cdb38b7cd8aff72b4ac56383b8ffd49e184de67fc1eff)(esbuild@0.28.1)(lightningcss@1.32.0)':
     dependencies:
       '@electron-forge/core-utils': 7.11.2
       '@electron-forge/maker-base': 7.11.2

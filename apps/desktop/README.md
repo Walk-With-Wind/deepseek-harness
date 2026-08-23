@@ -65,4 +65,4 @@ None; choosing the Desktop carrier does not alter provider requests.
 
 - The first release has one main window and no tray, deep links, remote Host, or untrusted-plugin sandbox.
 - Signed/notarized installer and update verification require the protected native CI matrix; a local unsigned package proves staging and runtime behavior, not release identity.
-- Windows publication remains blocked until a native diagnostic run passes Forge packaging and provides all five package-memory checkpoints; increasing the Node heap limit alone is not release evidence.
+- Windows packaging pins a Forge patch that scopes copied `.bin` cleanup to the packaged application instead of the repository. Publication remains blocked until a native diagnostic run with that patch provides all five package-memory checkpoints; increasing the Node heap limit alone is not release evidence.

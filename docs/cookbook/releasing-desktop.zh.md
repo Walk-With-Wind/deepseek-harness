@@ -57,7 +57,7 @@ pnpm run website:build
 
 人工运行 `Desktop` workflow，并设置 `release=true`。签名矩阵使用原生 `macos-15` arm64、`macos-15-intel` x64 和 `windows-2022` x64 runner。每个 job 都会从冻结 lockfile 安装、重建 Electron 原生依赖、执行 Forge maker、验证 packaged application、安装最终 maker 产物并重新派生发行材料。完整签名矩阵成功后，独立受保护矩阵会在同样的三个原生目标下载并安装每个签名产物，再针对全部安装结果执行 60 分钟 IPC 流式耐久；随后加入 `release-acceptance.json`，上传 `darwin-arm64`、`darwin-x64` 和 `win32-x64` 候选 artifact。最终矩阵 job 要求两个阶段都成功，拒绝部分结果。
 
-Windows 会为 Forge 设置 `DSH_DESKTOP_PACKAGE_DIAGNOSTICS=1`。JSONL 记录必须包含 `forge-start`、`packager-copy-complete`、`asar-crawl-complete`、`asar-insert-complete` 和 `archive-write-complete`，每项都带 RSS、heap、external memory、文件数、目录数与聚合字节数。若 job 在某个检查点前结束或耗尽内存，应保留诊断证据并停止发行；修改 heap 上限不属于根因修复或发行证据。
+Windows 会为 Forge 设置 `DSH_DESKTOP_PACKAGE_DIAGNOSTICS=1`。固定的 Forge 补丁会把已复制的 `.bin` 清理限定在已打包应用中；在所选 Forge 版本实现等效修复前，必须保留该补丁。JSONL 记录必须包含 `forge-start`、`packager-copy-complete`、`asar-crawl-complete`、`asar-insert-complete` 和 `archive-write-complete`，每项都带 RSS、heap、external memory、文件数、目录数与聚合字节数。若 job 在某个检查点前结束或耗尽内存，应保留诊断证据并停止发行；修改 heap 上限不属于根因修复或发行证据。
 
 在匹配平台与架构上进行本机未签名调查时运行：
 

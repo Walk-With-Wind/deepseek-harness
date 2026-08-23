@@ -710,7 +710,7 @@ External packages that a workspace package resolves at runtime. The tier covers 
 
 ${renderNpmTable(runtimeDeps)}
 
-pnpm applies local patches to the following packages at install time, so shipped artifacts carry modified copies; each patch file is the complete record of the modification:
+pnpm applies local patches to the following packages at install time. Build tooling and shipped artifacts consume the modified copies selected by their dependency graphs; each patch file is the complete record of the modification:
 
 ${patchedLines.join('\n')}
 ${renderClaudeDistribution(claudeDistribution)}
