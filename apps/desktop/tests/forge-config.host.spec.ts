@@ -15,6 +15,7 @@ import {
   DESKTOP_PUBLISHER,
   DESKTOP_REPOSITORY,
   DESKTOP_WINDOWS_SQUIRREL_PACKAGE_ID,
+  desktopNativeVersions,
 } from '../src/shared/release-policy.ts'
 
 describe('Desktop Forge config', () => {
@@ -81,10 +82,11 @@ describe('Desktop Forge config', () => {
     expect(DESKTOP_WINDOWS_SQUIRREL_PACKAGE_ID).toBe('DeepSeekHarnessCommunity')
     expect(DESKTOP_EXECUTABLE_NAME).toBe('deepseek-harness-community')
     expect(DESKTOP_REPOSITORY).toBe('https://github.com/Walk-With-Wind/deepseek-harness')
+    const buildSequence = Number(process.env.DSH_DESKTOP_BUILD_SEQUENCE ?? '1')
     expect(config.packagerConfig).toMatchObject({
       name: DESKTOP_PRODUCT_NAME,
       appVersion: '0.1.0',
-      buildVersion: '1.0.1',
+      buildVersion: desktopNativeVersions('0.1.0-rc.8', buildSequence).buildVersion,
       executableName: DESKTOP_EXECUTABLE_NAME,
       appBundleId: DESKTOP_APPLICATION_ID,
       appCopyright: `Copyright © ${DESKTOP_PUBLISHER}`,
