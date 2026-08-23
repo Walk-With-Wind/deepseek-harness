@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   assertDesktopBusinessDataUnchanged,
+  isExpectedDesktopLeaseConflict,
   snapshotDesktopBusinessData,
 } from './desktop-business-snapshot.mjs'
 
@@ -45,5 +46,25 @@ describe('Desktop business-data snapshot', () => {
 
     expect(() => { assertDesktopBusinessDataUnchanged(before, after) })
       .toThrow('竞争 Host 修改了共享业务数据')
+  })
+})
+
+describe('Desktop lease contention acceptance', () => {
+  it('接受详细 owner 与安全的泛化 live Host 冲突信息', () => {
+    expect(isExpectedDesktopLeaseConflict(
+      1,
+      'dsh: Harness home is already in use by desktop Host pid 42 (version 0.1.0-rc.8). Close that Host and retry; the competing process was not modified.',
+    )).toBe(true)
+    expect(isExpectedDesktopLeaseConflict(
+      1,
+      'dsh: Harness home is already in use by another live Host. Close that Host and retry; the competing process was not modified.',
+    )).toBe(true)
+  })
+
+  it('拒绝错误退出码、其他 Host 类型或不完整提示', () => {
+    const desktopConflict = 'Harness home is already in use by desktop Host pid 42 (version 0.1.0-rc.8). Close that Host and retry; the competing process was not modified.'
+    expect(isExpectedDesktopLeaseConflict(0, desktopConflict)).toBe(false)
+    expect(isExpectedDesktopLeaseConflict(1, desktopConflict.replace('desktop Host', 'web Host'))).toBe(false)
+    expect(isExpectedDesktopLeaseConflict(1, 'Harness home is already in use by another live Host.')).toBe(false)
   })
 })

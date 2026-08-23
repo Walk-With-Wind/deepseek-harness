@@ -1,4 +1,4 @@
-/** 安装包竞争验收使用的共享业务数据快照。 */
+/** 安装包竞争验收使用的共享业务数据快照与租约冲突判定。 */
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
@@ -10,6 +10,8 @@ const BUSINESS_PATHS = [
   'settings.yaml',
   '.credentials.yaml',
 ]
+
+const DESKTOP_LEASE_CONFLICT = /Harness home is already in use by (?:desktop Host pid \d+ \(version [^\r\n]+\)|another live Host)\. Close that Host and retry; the competing process was not modified\./
 
 /** @typedef {{ path: string, kind: 'file' | 'symlink', digest: string }} DesktopBusinessEntry */
 
@@ -66,4 +68,14 @@ export function assertDesktopBusinessDataUnchanged(before, after) {
   const paths = [...new Set([...beforeByPath.keys(), ...afterByPath.keys()])].sort()
   const changed = paths.filter(path => JSON.stringify(beforeByPath.get(path)) !== JSON.stringify(afterByPath.get(path)))
   throw new Error(`竞争 Host 修改了共享业务数据：${changed.join(', ')}`)
+}
+
+/**
+ * 判断竞争产品是否因当前 Desktop 租约安全退出。
+ * @param {number | null} status - 竞争进程退出码。
+ * @param {string} output - 竞争进程合并后的标准输出与错误输出。
+ * @returns {boolean} 退出码与完整冲突提示是否都符合预期。
+ */
+export function isExpectedDesktopLeaseConflict(status, output) {
+  return status === 1 && DESKTOP_LEASE_CONFLICT.test(output)
 }

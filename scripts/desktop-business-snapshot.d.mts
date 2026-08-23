@@ -21,3 +21,11 @@ export function assertDesktopBusinessDataUnchanged(
   before: readonly DesktopBusinessEntry[],
   after: readonly DesktopBusinessEntry[],
 ): void
+
+/**
+ * 判断竞争产品是否因当前 Desktop 租约安全退出。
+ * @param status - 竞争进程退出码。
+ * @param output - 竞争进程合并后的标准输出与错误输出。
+ * @returns 退出码与完整冲突提示是否都符合预期。
+ */
+export function isExpectedDesktopLeaseConflict(status: number | null, output: string): boolean

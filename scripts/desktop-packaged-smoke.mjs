@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
   assertDesktopBusinessDataUnchanged,
+  isExpectedDesktopLeaseConflict,
   snapshotDesktopBusinessData,
 } from './desktop-business-snapshot.mjs'
 
@@ -214,7 +215,7 @@ function assertCompetingProductsRejected(environment) {
     const after = snapshotDesktopBusinessData(dshHome)
     assertDesktopBusinessDataUnchanged(before, after)
     const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`
-    if (result.status !== 1 || !/Harness home is already in use by desktop Host pid \d+/.test(output)) {
+    if (!isExpectedDesktopLeaseConflict(result.status, output)) {
       throw new Error([
         `packaged app 持有租约时 ${contender} 未按预期失败：exit ${String(result.status)}`,
         output,
