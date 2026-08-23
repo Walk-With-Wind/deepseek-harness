@@ -33,6 +33,15 @@ const root = resolve(import.meta.dirname, '../..')
 const appRequire = createRequire(resolve(root, 'apps/desktop/package.json'))
 
 /**
+ * 将 ASAR 清单条目转换为跨平台相同的仓库相对路径。
+ * @param path - ASAR 实现返回的根路径条目。
+ * @returns 使用正斜杠且不含根前缀的条目路径。
+ */
+export function normalizeDesktopAsarEntry(path: string): string {
+  return path.replaceAll('\\', '/').replace(/^\/+/, '')
+}
+
+/**
  * 定位当前发行根目录中的原生 packaged 应用。
  * @param platform - 目标操作系统。
  * @param arch - 目标 CPU 架构。

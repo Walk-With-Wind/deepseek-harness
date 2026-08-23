@@ -12,6 +12,7 @@ import {
 import {
   desktopArtifactPaths,
   loadDesktopAsar,
+  normalizeDesktopAsarEntry,
   type DesktopAsarModule,
 } from './lib/desktop-artifact.ts'
 import { verifyNativeRuntimeFiles } from './lib/runtime-staging.ts'
@@ -156,7 +157,7 @@ if (existsSync(join(target.resources, 'app', 'lib', 'main.js'))) {
 }
 
 const asarModule = await loadDesktopAsar()
-const entries = new Set(asarModule.listPackage(asar).map(path => path.replace(/^\//, '')))
+const entries = new Set(asarModule.listPackage(asar).map(normalizeDesktopAsarEntry))
 for (const required of [
   'package.json', 'build-info.json', 'lib/main.js', 'lib/preload.cjs', 'lib/utility.js',
   'renderer/index.html', 'licenses/electron/LICENSE', 'licenses/electron/LICENSES.chromium.html',
