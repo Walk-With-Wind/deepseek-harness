@@ -179,15 +179,17 @@ async function runForge(
   if (!existsSync(forgeCli)) throw new Error('desktop: Electron Forge CLI 未安装')
   await resetDesktopForgeOutput(root)
   const diagnosticsEnabled = process.env.DSH_DESKTOP_PACKAGE_DIAGNOSTICS === '1'
-  const diagnosticNodeOptions = diagnosticsEnabled
+  // 命令行 preload 只作用于 Forge；其 pnpm 子进程不得继承 TypeScript loader。
+  const diagnosticNodeArgs = diagnosticsEnabled
     ? [
-      process.env.NODE_OPTIONS,
       '--import=tsx/esm',
       `--import=${pathToFileURL(packageDiagnosticsPreload).href}`,
-    ].filter((value): value is string => value !== undefined && value !== '').join(' ')
-    : process.env.NODE_OPTIONS
+    ]
+    : []
   await new Promise<void>((resolvePromise, reject) => {
-    const child = spawn(process.execPath, [forgeCli, command, staging, '--arch', arch, '--platform', platform], {
+    const child = spawn(process.execPath, [
+      ...diagnosticNodeArgs, forgeCli, command, staging, '--arch', arch, '--platform', platform,
+    ], {
       cwd: root,
       stdio: 'inherit',
       // Forge 在运行前检查 pnpm 布局；staging 已由共享 helper 物化为 hoisted 闭包。
@@ -195,7 +197,6 @@ async function runForge(
         ...process.env,
         CI: 'true',
         PNPM_CONFIG_NODE_LINKER: 'hoisted',
-        ...(diagnosticNodeOptions === undefined ? {} : { NODE_OPTIONS: diagnosticNodeOptions }),
         ...(diagnosticsEnabled
           ? {
             DSH_DESKTOP_DIAGNOSTICS_STAGING: staging,
