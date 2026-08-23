@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  clearDesktopPackageDiagnosticExecArgv,
   collectDesktopPackageInventory,
   desktopPackageInventoryFromAsarMetadata,
   emitDesktopPackageDiagnostic,
@@ -82,6 +83,17 @@ describe('Desktop package diagnostics', () => {
     expect(record).toBeDefined()
   })
 
+  it('在原生重建进程 fork 前清除 Forge 专用 preload 参数', () => {
+    const execArgv = [
+      '--import=tsx/esm',
+      '--import=file:///checkout/scripts/desktop-package-diagnostics-preload.ts',
+    ]
+
+    clearDesktopPackageDiagnosticExecArgv(execArgv)
+
+    expect(execArgv).toEqual([])
+  })
+
   it('在 Forge 与 ASAR 的真实阶段接入诊断，并只对 Windows CI 开启', async () => {
     const root = join(import.meta.dirname, '..')
     const [desktop, forge, preload, workflow] = await Promise.all([
@@ -101,6 +113,7 @@ describe('Desktop package diagnostics', () => {
     expect(preload).toContain("'asar-insert-complete'")
     expect(preload).toContain("'archive-write-complete'")
     expect(preload).toContain('writeFilesystem')
+    expect(preload).toContain('clearDesktopPackageDiagnosticExecArgv()')
     expect(workflow).toContain("DSH_DESKTOP_PACKAGE_DIAGNOSTICS: ${{ matrix.platform == 'win32' && '1' || '0' }}")
   })
 

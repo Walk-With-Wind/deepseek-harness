@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import type { Writable } from 'node:stream'
 import {
+  clearDesktopPackageDiagnosticExecArgv,
   collectDesktopPackageInventory,
   desktopPackageInventoryFromAsarMetadata,
   emitDesktopPackageDiagnostic,
@@ -21,6 +22,7 @@ type CrawlFunction = (...args: unknown[]) => Promise<[
 type WriteFilesystemFunction = (...args: unknown[]) => Promise<Writable>
 
 if (process.env.DSH_DESKTOP_PACKAGE_DIAGNOSTICS === '1') {
+  clearDesktopPackageDiagnosticExecArgv()
   const staging = requiredEnvironmentPath('DSH_DESKTOP_DIAGNOSTICS_STAGING')
   const forgeCli = realpathSync(requiredEnvironmentPath('DSH_DESKTOP_DIAGNOSTICS_FORGE_CLI'))
   const forgeRequire = createRequire(forgeCli)

@@ -28,6 +28,16 @@ export interface DesktopPackageDiagnostic extends DesktopPackageInventory {
 }
 
 /**
+ * Clear the diagnostic-only Node arguments before Forge forks native rebuild workers.
+ * @param execArgv - Mutable argument list owned by the diagnostic Forge process.
+ */
+export function clearDesktopPackageDiagnosticExecArgv(
+  execArgv: string[] = process.execArgv,
+): void {
+  execArgv.length = 0
+}
+
+/**
  * Recursively aggregate file metadata without reading names into the result or opening contents.
  * @param root - Directory whose descendants are being packaged.
  * @returns File count, directory count excluding the root, and regular-file bytes.
