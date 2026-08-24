@@ -535,6 +535,14 @@ async function readCandidate(
       throw new Error(`desktop-community-publish: ${target} 缺少材料 ${name}`)
     }
   }
+  let windowsReleaseIndex: string | undefined
+  if (platform === 'win32') {
+    const releaseIndex = artifacts.find(artifact => artifact.role === 'update-index')
+    if (releaseIndex === undefined) {
+      throw new Error('desktop-community-publish: win32 缺少 update-index')
+    }
+    windowsReleaseIndex = await readFile(join(root, ...releaseIndex.name.split('/')), 'utf8')
+  }
   return {
     target,
     root,
@@ -544,9 +552,7 @@ async function readCandidate(
     platform,
     arch,
     artifacts,
-    ...(platform === 'win32'
-      ? { windowsReleaseIndex: await readFile(join(root, 'RELEASES'), 'utf8') }
-      : {}),
+    ...(windowsReleaseIndex === undefined ? {} : { windowsReleaseIndex }),
     files: [
       ...artifacts.map(artifact => ({ path: artifact.name, role: artifact.role })),
       { path: updateName, role: 'update-manifest' },

@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   DESKTOP_APPLICATION_ID,
@@ -93,11 +93,15 @@ function writeTarget(
       { name: `${target}.dmg`, role: 'installer-dmg', bytes: `dmg-${target}` },
     ]
     : [
-      { name: 'DeepSeek-Harness-Community-Setup.exe', role: 'installer-exe', bytes: 'setup-win32-x64' },
-      { name: 'DeepSeekHarnessCommunity-0.1.0-rc.8-full.nupkg', role: 'update-nupkg', bytes: 'nupkg-win32-x64' },
-      { name: 'RELEASES', role: 'update-index', bytes: 'releases-win32-x64' },
+      { name: 'squirrel.windows/x64/DeepSeek-Harness-Community-Setup.exe', role: 'installer-exe', bytes: 'setup-win32-x64' },
+      { name: 'squirrel.windows/x64/DeepSeekHarnessCommunity-0.1.0-rc.8-full.nupkg', role: 'update-nupkg', bytes: 'nupkg-win32-x64' },
+      { name: 'squirrel.windows/x64/RELEASES', role: 'update-index', bytes: 'releases-win32-x64' },
     ]
-  for (const artifact of artifacts) writeFileSync(join(targetRoot, artifact.name), artifact.bytes)
+  for (const artifact of artifacts) {
+    const path = join(targetRoot, artifact.name)
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, artifact.bytes)
+  }
   const described = artifacts.map(artifact => ({
     name: artifact.name,
     role: artifact.role,

@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   buildDesktopCommunityPublishPlan,
@@ -69,8 +69,15 @@ function candidateRoot(version: string, sourceCommit = 'a'.repeat(40)): string {
         { name: windowsPackage, role: 'update-nupkg', bytes: 'nupkg' },
         { name: 'RELEASES', role: 'update-index', bytes: `${sha1('nupkg')}  ${windowsPackage} 5\n` },
       ]
-    for (const artifact of artifacts) writeFileSync(join(root, artifact.name), artifact.bytes)
-    const manifestArtifacts = artifacts.map(artifact => ({
+    const nestedArtifacts = platform === 'win32'
+      ? artifacts.map(artifact => ({ ...artifact, name: `squirrel.windows/x64/${artifact.name}` }))
+      : artifacts
+    for (const artifact of nestedArtifacts) {
+      const path = join(root, artifact.name)
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, artifact.bytes)
+    }
+    const manifestArtifacts = nestedArtifacts.map(artifact => ({
       name: artifact.name,
       role: artifact.role,
       size: Buffer.byteLength(artifact.bytes),
@@ -204,7 +211,7 @@ describe('Community Desktop publication plan', () => {
       throw new Error('expected the Windows RELEASES page to contain inline text')
     }
     expect(releasesPage.text).toContain(
-      'https://github.com/Walk-With-Wind/deepseek-harness/releases/download/dsh-v1.2.3-rc.1/win32-x64--DeepSeekHarnessCommunity-1.2.3-rc.1-full.nupkg',
+      'https://github.com/Walk-With-Wind/deepseek-harness/releases/download/dsh-v1.2.3-rc.1/win32-x64--squirrel.windows--x64--DeepSeekHarnessCommunity-1.2.3-rc.1-full.nupkg',
     )
   })
 
