@@ -13,7 +13,7 @@ import {
   DESKTOP_PUBLISHER,
   DESKTOP_WINDOWS_APP_USER_MODEL_ID,
 } from '../shared/release-policy.ts'
-import { shouldExitForSquirrelStartup } from './squirrel-startup.ts'
+import { handleSquirrelStartup } from './squirrel-startup.ts'
 import { readDesktopConfig } from './desktop-config.ts'
 import { requestSystemSessionEnd } from './session-end.ts'
 import {
@@ -22,8 +22,7 @@ import {
 } from './installed-export-acceptance.ts'
 import { resolveCommunityDesktopHome } from '../host/community-home.ts'
 
-if (shouldExitForSquirrelStartup(process.platform)) app.quit()
-else startDesktopMain()
+if (!handleSquirrelStartup()) startDesktopMain()
 
 function startDesktopMain(): void {
   assertDesktopReleasePlatform(process.platform)

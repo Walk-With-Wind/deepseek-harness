@@ -28,9 +28,15 @@ const installedDataSmokeScript = join(root, 'scripts', 'desktop-installed-data-s
 const appRequire = createRequire(join(root, 'apps', 'desktop', 'package.json'))
 const electronExecutable = appRequire('electron')
 const temporary = mkdtempSync(join(tmpdir(), 'dsh-desktop-installer-smoke-'))
+const WINDOWS_UNINSTALL_TIMEOUT_MS = 30_000
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { stdio: 'inherit', ...options })
+  if (result.error !== undefined) {
+    throw new Error(`desktop-installer-smoke: ${command} 无法完成：${result.error.message}`, {
+      cause: result.error,
+    })
+  }
   if (result.status !== 0) {
     throw new Error(`desktop-installer-smoke: ${command} 失败，exit ${String(result.status)}`)
   }
@@ -197,15 +203,30 @@ function smokeWindowsSquirrel() {
     smoke: runLifecycleSmoke,
     uninstall() {
       const update = join(installRoot, 'Update.exe')
+      let uninstallFailure
       try {
-        if (existsSync(update)) run(update, ['--uninstall', '-s'])
-      } finally {
-        const executableRemains = existsSync(installRoot)
-          && collectFiles(installRoot).some(path =>
-            path.toLowerCase().endsWith(`${DESKTOP_EXECUTABLE_NAME}.exe`))
-        rmSync(installRoot, { recursive: true, force: true })
-        if (executableRemains) throw new Error('desktop-installer-smoke: Squirrel 卸载后应用 exe 仍存在')
+        if (existsSync(update)) {
+          run(update, ['--uninstall', '--silent'], { timeout: WINDOWS_UNINSTALL_TIMEOUT_MS })
+        }
+      } catch (error) {
+        uninstallFailure = error
       }
+      const executableRemains = existsSync(installRoot)
+        && collectFiles(installRoot).some(path =>
+          path.toLowerCase().endsWith(`${DESKTOP_EXECUTABLE_NAME}.exe`))
+      try {
+        rmSync(installRoot, { recursive: true, force: true })
+      } catch (cleanupFailure) {
+        if (uninstallFailure !== undefined) {
+          throw new AggregateError(
+            [uninstallFailure, cleanupFailure],
+            'desktop-installer-smoke: Squirrel 卸载和清理均失败',
+          )
+        }
+        throw cleanupFailure
+      }
+      if (uninstallFailure !== undefined) throw uninstallFailure
+      if (executableRemains) throw new Error('desktop-installer-smoke: Squirrel 卸载后应用 exe 仍存在')
     },
   })
 }

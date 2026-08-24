@@ -41,6 +41,8 @@ Desktop 发行构建必须在对应目标原生执行：macOS arm64、macOS x64 
 
 Main 与 Utility 使用严格且带版本的控制协议通信。每次 Renderer 连接都会获得绑定新 generation 的 `MessagePort` 通道；Main 校验发送方和命令信封，但不解释 API 请求或响应正文。共享连接控制器必须先通过该端口完成一次 unary `host.describe` 请求并打开两条事件流，Renderer 才报告 ready，因此 packaged readiness 证明的是业务通道可达，而不只是传输层 hello。原生路径交接使用绑定 generation 的一次性 operation id：Utility 授权规范目标，Main 执行默认应用／文本编辑器打开器，取消或 generation 替换会移除等待中的操作。Utility 崩溃采用带有界抖动的指数退避恢复；Renderer 崩溃只替换窗口；连续失败会打开恢复熔断，并把重试和诊断导出保留为用户显式操作。包内 `desktop.config.json` 是严格校验的应用私有配置，未知字段、越界值以及不一致的 base／maximum／jitter 组合都会在创建运行时前失败。
 
+Windows 会在构建常规 Host 前处理 Squirrel 安装、更新、卸载和 obsolete 事件。快捷方式维护在分离的 updater 进程中运行，应用会在一秒后退出且不等待该进程关闭；即使两个 updater 进程需要同一把锁，父 Squirrel 操作也能继续。安装器验收把每次 Squirrel 卸载限制为 30 秒，并在清理 runner 前报告超时。
+
 关停会先停止新工作，请求 Utility flush 并 dispose，等待 `host/quiescent`，随后才退出或立即完成已下载更新。超过宽限期会升级终止，但不会宣称已达到 quiescent。macOS 与 Windows 只在用户选择更新命令后检查；在 Electron 开始自动下载前，Main 会根据编译进应用的 `https://walk-with-wind.github.io/deepseek-harness/desktop-updates` 源和 fork 的不可变 `dsh-v<version>` GitHub Release 验证每个 feed 包地址。Electron 会在下次正常启动时应用已下载更新；准备就绪操作只会请求提前进行 quiescent 重启。
 
 日志位于解析后 home 的 `logs/desktop/`，是仅属主可读写、按大小限制的 JSONL 文件，只允许稳定事件码和数值生命周期字段。诊断导出会先显示内容与排除项确认，再原子写入 ZIP；包内包含构建身份、安全摘要、配置值、不可逆 home／资源标识、更新状态和白名单日志，明确排除凭据、环境变量、会话／模型正文、工作区内容、插件源码与绝对路径。

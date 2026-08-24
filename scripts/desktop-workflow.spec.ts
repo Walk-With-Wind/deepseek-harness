@@ -278,6 +278,15 @@ describe('Desktop CI workflow', () => {
 
   it('最终 maker 产物按平台安装、运行、卸载、重装并再次运行', () => {
     const installer = readFileSync(resolve(root, 'scripts/desktop-installer-smoke.mjs'), 'utf8')
+    const squirrelStartup = readFileSync(
+      resolve(root, 'apps/desktop/src/main/squirrel-startup.ts'), 'utf8',
+    )
+    const desktopManifest = JSON.parse(
+      readFileSync(resolve(root, 'apps/desktop/package.json'), 'utf8'),
+    ) as {
+      dependencies: Record<string, string>
+      devDependencies: Record<string, string>
+    }
     for (const name of ['unsigned-native', 'signed-release']) {
       expect((jobs()[name]!.env as Record<string, string>).NODE_OPTIONS)
         .toBe('--max-old-space-size=5120')
@@ -292,7 +301,15 @@ describe('Desktop CI workflow', () => {
     expect(installer).not.toContain("'apt-get', 'install'")
     expect(installer).not.toContain("'rpm', '-i'")
     expect(installer).not.toContain("'/usr/share/pixmaps/deepseek-harness.png'")
-    expect(installer).toContain("['--uninstall', '-s']")
+    expect(installer).toContain("['--uninstall', '--silent']")
+    expect(installer).toContain('WINDOWS_UNINSTALL_TIMEOUT_MS')
+    expect(installer).toContain('timeout: WINDOWS_UNINSTALL_TIMEOUT_MS')
+    expect(installer).toContain('result.error')
+    expect(squirrelStartup).toContain("stdio: 'ignore'")
+    expect(squirrelStartup).toContain('child.unref()')
+    expect(squirrelStartup).not.toContain("from 'electron-squirrel-startup'")
+    expect(desktopManifest.dependencies).not.toHaveProperty('electron-squirrel-startup')
+    expect(desktopManifest.devDependencies).not.toHaveProperty('@types/electron-squirrel-startup')
     expect(installer).toContain('exerciseInstallerLifecycle')
     expect(installer).toContain('runReinstalledSmoke')
     expect(installer).toContain("reinstall: 'passed'")
