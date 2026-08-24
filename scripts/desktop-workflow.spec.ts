@@ -406,4 +406,16 @@ describe('Desktop CI workflow', () => {
     const signedSteps = jobs()['signed-release']!.steps as Array<Record<string, unknown>>
     expect(signedSteps.some(value => value.run === 'pnpm run test:desktop:export-stress')).toBe(false)
   })
+
+  it('Windows 安装态 RSS 采样复用稳定 PID，并限制 PowerShell 查询时间', () => {
+    const installed = readFileSync(resolve(root, 'scripts/desktop-installed-data-smoke.mjs'), 'utf8')
+    expect(installed).toContain("const rssSampleIntervalMs = process.platform === 'win32' ? 1_000 : 100")
+    expect(installed).toContain('const measuredPids = baseline.entries.map(entry => entry.pid)')
+    expect(installed).toContain('const sample = processRss(measuredPids)')
+    expect(installed).toContain('utilityRssBytes(utilityPid, [utilityPid])')
+    expect(installed).toContain('timeout: WINDOWS_PROCESS_QUERY_TIMEOUT_MS')
+    expect(installed).toContain('result.error')
+    expect(installed).toContain("reportPhase('attachment-persistence')")
+    expect(installed).toContain("reportPhase('shutdown')")
+  })
 })

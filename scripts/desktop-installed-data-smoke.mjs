@@ -31,6 +31,8 @@ if (!existsSync(executable)) throw new Error('desktop-installed-data-smoke: 缺�
 const product = resolve(process.env.DSH_DESKTOP_SMOKE_PRODUCT ?? dirname(executable))
 const acceptanceBytes = 100 * 1024 * 1024
 const peakRssDeltaLimitBytes = 300 * 1024 * 1024
+const WINDOWS_PROCESS_QUERY_TIMEOUT_MS = 10_000
+const rssSampleIntervalMs = process.platform === 'win32' ? 1_000 : 100
 const perImageBytes = 5 * 1024 * 1024
 const diagnosticBytes = process.env.DSH_DESKTOP_ATTACHMENT_DIAGNOSTIC_BYTES === undefined
   ? acceptanceBytes
@@ -102,6 +104,11 @@ let browser
 let activePage
 let enduranceProvider
 let observedPids = new Set()
+
+/** 输出安装态验收的当前阶段，使原生 runner 卡点可从实时日志辨认。 */
+function reportPhase(phase) {
+  console.log(`desktop-installed-data-smoke: phase=${phase}`)
+}
 
 /** 在驱动进程生成严格有效的 GIF，避免把验收数据构造开销计入 Renderer RSS。 */
 function seedAttachmentFiles() {
@@ -514,7 +521,11 @@ function processRows() {
 function powershellJson(script) {
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
     encoding: 'utf8',
+    timeout: WINDOWS_PROCESS_QUERY_TIMEOUT_MS,
   })
+  if (result.error !== undefined) {
+    throw new Error('desktop-installed-data-smoke: PowerShell 检查无法完成', { cause: result.error })
+  }
   if (result.status !== 0) {
     throw new Error(`desktop-installed-data-smoke: PowerShell 检查失败：${result.stderr}`)
   }
@@ -568,6 +579,11 @@ function processTreeRss(utilityPid) {
   if (pids.length < 3) {
     throw new Error(`desktop-installed-data-smoke: RSS 进程集合不完整：${pids.join(', ')}`)
   }
+  return processRss(pids)
+}
+
+/** 读取已确定进程集合的当前 RSS，避免高频重复枚举 Windows 进程树。 */
+function processRss(pids) {
   if (process.platform === 'win32') {
     const entries = powershellJson(`Get-Process -Id ${pids.join(',')} -ErrorAction Stop | Select-Object Id,WorkingSet64 | ConvertTo-Json -Compress`)
       .map(value => ({ pid: Number(value.Id), rssBytes: Number(value.WorkingSet64) }))
@@ -583,8 +599,8 @@ function processTreeRss(utilityPid) {
 }
 
 /** 读取当前 Utility 的原生工作集，避免把 Main 与 Renderer 波动计入导出门槛。 */
-function utilityRssBytes(utilityPid) {
-  const entry = processTreeRss(utilityPid).entries.find(value => value.pid === utilityPid)
+function utilityRssBytes(utilityPid, measuredPids) {
+  const entry = processRss(measuredPids).entries.find(value => value.pid === utilityPid)
   if (entry === undefined) throw new Error('desktop-installed-data-smoke: Utility RSS 样本缺失')
   return entry.rssBytes
 }
@@ -768,11 +784,17 @@ async function runInstalledExportAcceptance(page, utilityPid) {
   await waitForExportCleanup()
 
   const successOperationId = `installed-export-success-${randomUUID()}`
-  const baselineUtilityRssBytes = utilityRssBytes(utilityPid)
+  const baselineUtilityRssBytes = utilityRssBytes(utilityPid, [utilityPid])
   let peakUtilityRssBytes = baselineUtilityRssBytes
+  let samplingFailure
   const sampler = setInterval(() => {
-    peakUtilityRssBytes = Math.max(peakUtilityRssBytes, utilityRssBytes(utilityPid))
-  }, 100)
+    try {
+      peakUtilityRssBytes = Math.max(peakUtilityRssBytes, utilityRssBytes(utilityPid, [utilityPid]))
+    } catch (error) {
+      samplingFailure = error
+      clearInterval(sampler)
+    }
+  }, rssSampleIntervalMs)
   let saved
   try {
     saved = await withTimeout(page.evaluate(async ({ operationId, sessionIdValue, suggestedNameValue }) => {
@@ -786,6 +808,7 @@ async function runInstalledExportAcceptance(page, utilityPid) {
   } finally {
     clearInterval(sampler)
   }
+  if (samplingFailure !== undefined) throw samplingFailure
   if (saved.type !== 'session-log/result' || saved.outcome !== 'saved') {
     throw new Error(`desktop-installed-data-smoke: 成功导出结果错误 ${JSON.stringify(saved)}`)
   }
@@ -1155,6 +1178,7 @@ try {
   seedWorkspace(enduranceProvider?.baseUrl)
   const attachmentPaths = seedAttachmentFiles()
   const devtools = deferred()
+  reportPhase('launch')
   const applicationEnv = {
     ...process.env,
     DSH_HOME: dshHome,
@@ -1226,19 +1250,27 @@ try {
     : undefined
   const utilityPid = await waitForUtilityPid()
   const baseline = processTreeRss(utilityPid)
+  const measuredPids = baseline.entries.map(entry => entry.pid)
   const checkpoints = { baseline: await memoryCheckpoint(page, utilityPid) }
+  reportPhase('attachment-persistence')
   let peak = baseline.totalBytes
   let peakEntries = baseline.entries
   let currentPhase = 'draft-attachment'
   let peakPhase = currentPhase
+  let samplingFailure
   const sampler = setInterval(() => {
-    const sample = processTreeRss(utilityPid)
-    if (sample.totalBytes > peak) {
-      peak = sample.totalBytes
-      peakEntries = sample.entries
-      peakPhase = currentPhase
+    try {
+      const sample = processRss(measuredPids)
+      if (sample.totalBytes > peak) {
+        peak = sample.totalBytes
+        peakEntries = sample.entries
+        peakPhase = currentPhase
+      }
+    } catch (error) {
+      samplingFailure = error
+      clearInterval(sampler)
     }
-  }, 100)
+  }, rssSampleIntervalMs)
   let persistence
   try {
     await attachImages(page, attachmentPaths)
@@ -1255,6 +1287,8 @@ try {
   } finally {
     clearInterval(sampler)
   }
+  if (samplingFailure !== undefined) throw samplingFailure
+  reportPhase('attachment-persistence-complete')
   const peakRssDeltaBytes = peak - baseline.totalBytes
   if (fullAcceptance && peakRssDeltaBytes > peakRssDeltaLimitBytes) {
     throw new Error([
@@ -1266,13 +1300,18 @@ try {
     ].join('\n'))
   }
 
-  const installedExport = installedExportAcceptance
-    ? await runInstalledExportAcceptance(page, utilityPid)
-    : undefined
-  const installedEndurance = installedEnduranceAcceptance
-    ? await runInstalledEnduranceAcceptance(context, page, utilityPid, enduranceProvider)
-    : undefined
+  let installedExport
+  if (installedExportAcceptance) {
+    reportPhase('export')
+    installedExport = await runInstalledExportAcceptance(page, utilityPid)
+  }
+  let installedEndurance
+  if (installedEnduranceAcceptance) {
+    reportPhase('endurance')
+    installedEndurance = await runInstalledEnduranceAcceptance(context, page, utilityPid, enduranceProvider)
+  }
 
+  reportPhase('shutdown')
   requestGracefulShutdown()
   if (!await waitForExit(application, 20_000)) {
     throw new Error('desktop-installed-data-smoke: 应用未在 20 秒内退出')
