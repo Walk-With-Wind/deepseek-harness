@@ -32,7 +32,7 @@
 
 人工运行 `Community Desktop Unsigned Preview`，传入该 Desktop `build_run_id`。受保护 job 只接受当前 `master` commit 上成功且完整的 Preview 矩阵，检出其精确 SHA，并把每个候选的版本与源 commit 绑定到该 checkout。它通过 `pnpm run desktop:community-preview` 验证同一矩阵，确认已启用 immutable Releases，并递归解析已有的轻量或附注 Preview tag，要求其最终指向冻结 commit。它创建指向该 SHA 且包含全部资产的 draft，重新下载并比较每个字节，再以唯一 `dsh-preview-v<version>-<commit>-run.<id>` tag 发布不可变 prerelease。仓库写凭据只注入 GitHub API 和 Release 步骤，依赖安装与本地候选验证无法读取。
 
-Preview Release 只包含两个 macOS DMG、Windows setup 可执行文件及带目标前缀的审计材料。候选验证器按照已验证清单中的相对路径解析每个安装器和更新产物，包括位于 Windows maker 子目录内的 Squirrel 文件。它排除 macOS 更新 ZIP、Windows nupkg／`RELEASES`、Pages 输出以及全部 canary／stable 元数据。其内嵌构建身份为 `unsigned-preview`；应用不会创建原生 updater，**检查更新…** 会说明自动更新不可用，且 Preview 不能作为 canary 或 stable 晋级证据。
+Preview Release 只包含两个 macOS DMG、Windows setup 可执行文件及带目标前缀的审计材料。候选验证器按照已验证清单中的相对路径解析每个安装器和更新产物，包括位于 Windows maker 子目录内的 Squirrel 文件。生成清单或上传草稿前，发布流程会把路径片段转换为保守的 ASCII Release 资产名，并拒绝重名，防止 GitHub 静默改写资产名。它排除 macOS 更新 ZIP、Windows nupkg／`RELEASES`、Pages 输出以及全部 canary／stable 元数据。其内嵌构建身份为 `unsigned-preview`；应用不会创建原生 updater，**检查更新…** 会说明自动更新不可用，且 Preview 不能作为 canary 或 stable 晋级证据。
 
 macOS Preview 应用只有 ad-hoc 签名且未经公证；Windows Preview 可执行文件没有签名。写入 Preview 验收记录前，每个 macOS lane 都会验证 packaged 应用、挂载最终 DMG、用 `codesign` 验证其中的应用，并要求 ad-hoc 身份且不存在 `Authority`；Windows lane 要求 packaged 应用可执行文件与最终 Setup 可执行文件的 Authenticode 状态均为 `NotSigned`。测试者必须检查 manifest 与 `SHA256SUMS`，只从 fork Release 获取安装器，并显式批准操作系统警告。不得把这些字节描述为可信终端用户发行；广泛发布前必须改用已签名 canary 路线。
 

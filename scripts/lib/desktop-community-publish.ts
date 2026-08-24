@@ -364,6 +364,9 @@ export async function buildDesktopCommunityPreviewPlan(
     ]
     for (const file of files) {
       const name = releaseAssetName(candidate.target, file.path)
+      if (releaseFiles.some(existing => existing.name === name)) {
+        throw new Error(`desktop-community-preview: Release 资产名冲突 ${name}`)
+      }
       const sourcePath = join(candidate.root, ...file.path.split('/'))
       const bytes = await readFile(sourcePath)
       releaseFiles.push({ name, sourcePath })
@@ -891,7 +894,10 @@ function renderWindowsReleaseIndex(
 }
 
 function releaseAssetName(target: DesktopCommunityTarget, path: string): string {
-  return `${target}--${path.split('/').join('--')}`
+  const normalizedPath = path.split('/').map(segment => (
+    segment.replace(/[^A-Za-z0-9._-]+/g, '-')
+  )).join('--')
+  return `${target}--${normalizedPath}`
 }
 
 function materialRole(path: string): string {

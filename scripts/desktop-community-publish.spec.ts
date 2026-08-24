@@ -62,7 +62,7 @@ function candidateRoot(version: string, sourceCommit = 'a'.repeat(40)): string {
     const artifacts = platform === 'darwin'
       ? [
         { name: `DeepSeek-Harness-Community-${version}-${target}.zip`, role: 'update-zip', bytes: 'zip' },
-        { name: `DeepSeek-Harness-Community-${version}-${target}.dmg`, role: 'installer-dmg', bytes: 'dmg' },
+        { name: 'DeepSeek Harness Community.dmg', role: 'installer-dmg', bytes: 'dmg' },
       ]
       : [
         { name: 'DeepSeek-Harness-Community-Setup.exe', role: 'installer-exe', bytes: 'setup' },
@@ -199,6 +199,11 @@ describe('Community Desktop publication plan', () => {
       targets: [...REQUIRED_DESKTOP_COMMUNITY_TARGETS],
     })
     expect(plan.release.assets.length).toBeGreaterThan(20)
+    expect(plan.release.assets.map(asset => asset.name)).toEqual(expect.arrayContaining([
+      'darwin-arm64--DeepSeek-Harness-Community.dmg',
+      'darwin-x64--DeepSeek-Harness-Community.dmg',
+    ]))
+    expect(plan.release.assets.every(asset => /^[A-Za-z0-9._-]+$/.test(asset.name))).toBe(true)
     expect(plan.pages.map(file => file.path)).toEqual(expect.arrayContaining([
       'desktop-updates/canary/darwin-arm64/releases.json',
       'desktop-updates/canary/darwin-x64/releases.json',

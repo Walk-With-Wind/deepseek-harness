@@ -83,6 +83,7 @@ function writeTarget(
   inputRoot: string,
   target: PreviewAcceptanceOptions['target'],
   releaseMode: 'unsigned-preview' | 'signed' = 'unsigned-preview',
+  darwinInstallerName = 'DeepSeek Harness Community.dmg',
 ): void {
   const targetRoot = join(inputRoot, target)
   mkdirSync(targetRoot, { recursive: true })
@@ -90,7 +91,7 @@ function writeTarget(
   const artifacts = platform === 'darwin'
     ? [
       { name: `${target}.zip`, role: 'update-zip', bytes: `zip-${target}` },
-      { name: `${target}.dmg`, role: 'installer-dmg', bytes: `dmg-${target}` },
+      { name: darwinInstallerName, role: 'installer-dmg', bytes: `dmg-${target}` },
     ]
     : [
       { name: 'squirrel.windows/x64/DeepSeek-Harness-Community-Setup.exe', role: 'installer-exe', bytes: 'setup-win32-x64' },
@@ -202,6 +203,11 @@ describe('Community Desktop unsigned preview publication', () => {
     expect(plan.release.assets.map(asset => asset.role)).not.toContain('update-nupkg')
     expect(plan.release.assets.map(asset => asset.role)).not.toContain('update-index')
     expect(plan.releaseFiles.map(file => file.name).join('\n')).not.toMatch(/\.zip$|\.nupkg$|RELEASES$/m)
+    expect(plan.releaseFiles.map(file => file.name)).toEqual(expect.arrayContaining([
+      'darwin-arm64--DeepSeek-Harness-Community.dmg',
+      'darwin-x64--DeepSeek-Harness-Community.dmg',
+    ]))
+    expect(plan.releaseFiles.every(file => /^[A-Za-z0-9._-]+$/.test(file.name))).toBe(true)
 
     expect(previewPublication.writeDesktopCommunityPreviewPlan).toBeTypeOf('function')
     const outputRoot = mkdtempSync(join(tmpdir(), 'dsh-desktop-community-preview-output-'))
@@ -224,5 +230,16 @@ describe('Community Desktop unsigned preview publication', () => {
     await expect(previewPublication.buildDesktopCommunityPreviewPlan({
       inputRoot, expectedVersion: version, expectedSourceCommit: sourceCommit,
     })).rejects.toThrow(/unsigned-preview/)
+  })
+
+  it('拒绝候选路径规范化后形成重复 Release 资产名', async () => {
+    expect(previewPublication.buildDesktopCommunityPreviewPlan).toBeTypeOf('function')
+    const inputRoot = setupMatrix()
+    rmSync(join(inputRoot, 'darwin-arm64'), { recursive: true, force: true })
+    writeTarget(inputRoot, 'darwin-arm64', 'unsigned-preview', 'desktop sbom.cdx.json')
+
+    await expect(previewPublication.buildDesktopCommunityPreviewPlan({
+      inputRoot, expectedVersion: version, expectedSourceCommit: sourceCommit,
+    })).rejects.toThrow(/Release 资产名冲突/)
   })
 })
