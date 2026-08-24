@@ -30,6 +30,10 @@ const electronExecutable = appRequire('electron')
 const temporary = mkdtempSync(join(tmpdir(), 'dsh-desktop-installer-smoke-'))
 const WINDOWS_UNINSTALL_TIMEOUT_MS = 30_000
 
+function reportLifecyclePhase(platform, phase, action) {
+  console.log(`desktop-installer-smoke: platform=${platform} phase=${phase} action=${action}`)
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { stdio: 'inherit', ...options })
   if (result.error !== undefined) {
@@ -170,12 +174,17 @@ function smokeMacDmg() {
   run('hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mount, dmg])
   try {
     exerciseInstallerLifecycle({
-      install() {
+      install(phase) {
+        reportLifecyclePhase('darwin', phase, 'install')
         run('ditto', [join(mount, `${DESKTOP_PRODUCT_NAME}.app`), installed])
         return join(installed, 'Contents', 'MacOS', DESKTOP_EXECUTABLE_NAME)
       },
-      smoke: runLifecycleSmoke,
-      uninstall() {
+      smoke(executable, phase) {
+        reportLifecyclePhase('darwin', phase, 'smoke')
+        runLifecycleSmoke(executable, phase)
+      },
+      uninstall(phase) {
+        reportLifecyclePhase('darwin', phase, 'uninstall')
         rmSync(installed, { recursive: true, force: true })
         if (existsSync(installed)) throw new Error('desktop-installer-smoke: macOS 应用卸载后仍存在')
       },
@@ -193,15 +202,20 @@ function smokeWindowsSquirrel() {
     throw new Error('desktop-installer-smoke: LOCALAPPDATA 未设置')
   }
   exerciseInstallerLifecycle({
-    install() {
+    install(phase) {
+      reportLifecyclePhase('win32', phase, 'install')
       run(setup, ['--silent'])
       const executable = collectFiles(installRoot)
         .find(path => path.toLowerCase().endsWith(`${DESKTOP_EXECUTABLE_NAME}.exe`))
       if (executable === undefined) throw new Error('desktop-installer-smoke: Squirrel 未安装应用 exe')
       return executable
     },
-    smoke: runLifecycleSmoke,
-    uninstall() {
+    smoke(executable, phase) {
+      reportLifecyclePhase('win32', phase, 'smoke')
+      runLifecycleSmoke(executable, phase)
+    },
+    uninstall(phase) {
+      reportLifecyclePhase('win32', phase, 'uninstall')
       const update = join(installRoot, 'Update.exe')
       let uninstallFailure
       try {

@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-25-windows-native-smoke-exit.md
+2026-08-25-windows-native-smoke-exit.md: fe302afdfd78030953a878d725c734d73856f14a
+2026-08-25-windows-native-smoke-exit.zh.md: 0286d9c81adbf6d5b553c34cae409503542662fe

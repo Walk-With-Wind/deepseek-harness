@@ -45,6 +45,8 @@ Windows 会在构建常规 Host 前处理 Squirrel 安装、更新、卸载和 o
 
 Windows 安装态数据验收会在附件或导出阶段开始时确定需要测量的进程集合，随后每秒读取一次这些稳定 PID 的工作集，不在每个样本中重新枚举 WMI 进程树。每次 PowerShell 查询都有 10 秒上限；验收还会输出启动、附件持久化、可选导出／耐久和关停阶段标记，使原生 runner 的停止位置可直接从实时日志辨认。
 
+最终安装目录的原生能力探针会加载全部 `.node` 文件，并实际执行 Sharp、Koffi、ripgrep 与 node-pty。探针刷新成功 JSON 后会显式退出，因为 Windows 原生模块可能保留与验收结果无关的 libuv handle。安装器驱动会为首次安装和重装分别输出 `install`、`smoke` 与 `uninstall` 阶段，使子进程已完成但未退出的故障与 Squirrel 维护故障可以区分。
+
 关停会先停止新工作，请求 Utility flush 并 dispose，等待 `host/quiescent`，随后才退出或立即完成已下载更新。超过宽限期会升级终止，但不会宣称已达到 quiescent。macOS 与 Windows 只在用户选择更新命令后检查；在 Electron 开始自动下载前，Main 会根据编译进应用的 `https://walk-with-wind.github.io/deepseek-harness/desktop-updates` 源和 fork 的不可变 `dsh-v<version>` GitHub Release 验证每个 feed 包地址。Electron 会在下次正常启动时应用已下载更新；准备就绪操作只会请求提前进行 quiescent 重启。
 
 日志位于解析后 home 的 `logs/desktop/`，是仅属主可读写、按大小限制的 JSONL 文件，只允许稳定事件码和数值生命周期字段。诊断导出会先显示内容与排除项确认，再原子写入 ZIP；包内包含构建身份、安全摘要、配置值、不可逆 home／资源标识、更新状态和白名单日志，明确排除凭据、环境变量、会话／模型正文、工作区内容、插件源码与绝对路径。

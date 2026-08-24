@@ -48,13 +48,24 @@ if (rg.status !== 0 || !/^ripgrep /m.test(rg.stdout)) {
 const ptyOutput = await runPty(appRequire('node-pty'))
 if (!ptyOutput.includes('dsh-native-pty')) throw new Error('desktop-native-smoke: PTY 未返回探针文本')
 
-console.log(JSON.stringify({
+await writeResult({
   outcome: 'passed',
   loadedAddons,
   sharpBytes: png.byteLength,
   ripgrep: rg.stdout.trim().split(/\r?\n/, 1)[0],
   pty: 'passed',
-}, null, 2))
+})
+// 原生模块可在 Windows 留下 libuv handle；探针结果刷新后不再依赖自然事件循环退出。
+process.exit(0)
+
+function writeResult(result) {
+  return new Promise((resolvePromise, reject) => {
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`, (error) => {
+      if (error === undefined || error === null) resolvePromise()
+      else reject(error)
+    })
+  })
+}
 
 function collectFiles(directory) {
   const files = []
