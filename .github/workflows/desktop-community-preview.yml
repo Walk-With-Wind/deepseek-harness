@@ -88,6 +88,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "release_exists=false" >> "$GITHUB_OUTPUT"
+          echo "draft_exists=false" >> "$GITHUB_OUTPUT"
           TAG="$tag"
           tag_exists=false
           if tag_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$TAG" 2>/dev/null)"; then
@@ -105,13 +106,17 @@ jobs:
             tag_exists=true
           fi
           if gh release view "$tag" >/dev/null 2>&1; then
-            test "$tag_exists" = true
             state="$(gh release view "$tag" --json isDraft,isImmutable,isPrerelease,targetCommitish)"
-            test "$(jq -r .isDraft <<<"$state")" = false
-            test "$(jq -r .isImmutable <<<"$state")" = true
             test "$(jq -r .isPrerelease <<<"$state")" = true
             test "$(jq -r .targetCommitish <<<"$state")" = "$SOURCE_COMMIT"
-            echo "release_exists=true" >> "$GITHUB_OUTPUT"
+            if test "$(jq -r .isDraft <<<"$state")" = true; then
+              test "$(jq -r .isImmutable <<<"$state")" = false
+              echo "draft_exists=true" >> "$GITHUB_OUTPUT"
+            else
+              test "$tag_exists" = true
+              test "$(jq -r .isImmutable <<<"$state")" = true
+              echo "release_exists=true" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Validate complete unsigned matrix and render Preview assets
@@ -134,12 +139,9 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/immutable-releases")"
           jq -e '.enabled == true' <<<"$setting"
 
-      - name: Create draft Preview with the complete asset set
-        if: steps.release-state.outputs.release_exists != 'true'
+      - name: Render unsigned Preview release notes
         env:
-          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.release-state.outputs.version }}
-          TAG: ${{ steps.release-state.outputs.tag }}
           SOURCE_COMMIT: ${{ steps.build-run.outputs.source_commit }}
         run: |
           {
@@ -152,6 +154,17 @@ jobs:
             echo "Source commit: $SOURCE_COMMIT"
             echo "Preview manifest: desktop-community-preview-manifest.json"
           } > .preview/release-notes.md
+
+      - name: Create draft Preview with the complete asset set
+        if: >-
+          steps.release-state.outputs.release_exists != 'true' &&
+          steps.release-state.outputs.draft_exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release-state.outputs.version }}
+          TAG: ${{ steps.release-state.outputs.tag }}
+          SOURCE_COMMIT: ${{ steps.build-run.outputs.source_commit }}
+        run: |
           gh release create "$TAG" .preview/release/* \
             --draft \
             --prerelease \
@@ -163,12 +176,42 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release-state.outputs.tag }}
+          VERSION: ${{ steps.release-state.outputs.version }}
         run: |
           mkdir .remote-release
           gh release download "$TAG" --dir .remote-release
           (cd .preview/release && sha256sum * | sort) > .expected-release-sha256
           (cd .remote-release && sha256sum * | sort) > .actual-release-sha256
           diff -u .expected-release-sha256 .actual-release-sha256
+          remote_title="$(gh release view "$TAG" --json name --jq .name)"
+          remote_notes="$(gh release view "$TAG" --json body --jq .body)"
+          test "$remote_title" = "DeepSeek Harness Community Unsigned Preview $VERSION"
+          test "$remote_notes" = "$(cat .preview/release-notes.md)"
+
+      - name: Bind verified draft tag to frozen source
+        if: steps.release-state.outputs.release_exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release-state.outputs.tag }}
+          SOURCE_COMMIT: ${{ steps.build-run.outputs.source_commit }}
+        run: |
+          if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/$TAG" \
+              -f sha="$SOURCE_COMMIT"
+          fi
+          tag_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$TAG")"
+          tag_type="$(jq -r .object.type <<<"$tag_ref")"
+          tag_sha="$(jq -r .object.sha <<<"$tag_ref")"
+          for _ in $(seq 1 8); do
+            if test "$tag_type" = commit; then break; fi
+            test "$tag_type" = tag
+            tag_object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/$tag_sha")"
+            tag_type="$(jq -r .object.type <<<"$tag_object")"
+            tag_sha="$(jq -r .object.sha <<<"$tag_object")"
+          done
+          test "$tag_type" = commit
+          test "$tag_sha" = "$SOURCE_COMMIT"
 
       - name: Publish and verify immutable Preview
         env:

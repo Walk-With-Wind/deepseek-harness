@@ -59,6 +59,7 @@ describe('Community Desktop unsigned preview workflow', () => {
       'Require repository immutable releases',
       'Create draft Preview with the complete asset set',
       'Verify downloaded draft Release bytes',
+      'Bind verified draft tag to frozen source',
       'Publish and verify immutable Preview',
     ]) {
       const step = parsed.jobs.publish.steps.find(candidate => candidate.name === name)
@@ -83,6 +84,23 @@ describe('Community Desktop unsigned preview workflow', () => {
     expect(source).not.toContain('--clobber')
     expect(source).not.toContain('desktop-community-release-manifest.json')
     expect(source).toContain('desktop-community-preview-manifest.json')
+  })
+
+  it('可恢复已验证草稿，并在字节核对后才绑定冻结 tag', () => {
+    const source = readFileSync(workflowPath, 'utf8')
+    expect(source).toContain('echo "draft_exists=false"')
+    expect(source).toContain('echo "draft_exists=true"')
+    expect(source).toContain("steps.release-state.outputs.draft_exists != 'true'")
+    expect(source).toContain('gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs"')
+    expect(source).toContain('-f ref="refs/tags/$TAG"')
+    expect(source).toContain('-f sha="$SOURCE_COMMIT"')
+
+    const verifyIndex = source.indexOf('- name: Verify downloaded draft Release bytes')
+    const bindIndex = source.indexOf('- name: Bind verified draft tag to frozen source')
+    const publishIndex = source.indexOf('- name: Publish and verify immutable Preview')
+    expect(verifyIndex).toBeGreaterThan(0)
+    expect(bindIndex).toBeGreaterThan(verifyIndex)
+    expect(publishIndex).toBeGreaterThan(bindIndex)
   })
 
   it('锁定全部第三方 action 版本', () => {

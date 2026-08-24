@@ -30,7 +30,7 @@
 
 签名凭据不可用时，无签名 Preview 路线只用于受邀测试。从当前 `master` 人工运行 `Desktop` workflow，并设置 `release=false`；pull request 构建仍是开发产物，不能成为 Preview。该 run 必须完成 `darwin-arm64`、`darwin-x64` 与 `win32-x64` 的完整无签名矩阵以及 `preview-matrix-complete`。
 
-人工运行 `Community Desktop Unsigned Preview`，传入该 Desktop `build_run_id`。受保护 job 只接受当前 `master` commit 上成功且完整的 Preview 矩阵，检出其精确 SHA，并把每个候选的版本与源 commit 绑定到该 checkout。它通过 `pnpm run desktop:community-preview` 验证同一矩阵，确认已启用 immutable Releases，并递归解析已有的轻量或附注 Preview tag，要求其最终指向冻结 commit。它创建指向该 SHA 且包含全部资产的 draft，重新下载并比较每个字节，再以唯一 `dsh-preview-v<version>-<commit>-run.<id>` tag 发布不可变 prerelease。仓库写凭据只注入 GitHub API 和 Release 步骤，依赖安装与本地候选验证无法读取。
+人工运行 `Community Desktop Unsigned Preview`，传入该 Desktop `build_run_id`。受保护 job 只接受当前 `master` commit 上成功且完整的 Preview 矩阵，检出其精确 SHA，并把每个候选的版本与源 commit 绑定到该 checkout。它通过 `pnpm run desktop:community-preview` 验证同一矩阵，确认已启用 immutable Releases，并只接受身份一致且可恢复的 draft 或不可变 prerelease。它创建或复用指向该 SHA 且包含全部资产的 draft，重新下载并比较每个字节、标题与警告说明，再在冻结 commit 上创建缺失的轻量 tag，递归验证 tag 目标，最后以唯一 `dsh-preview-v<version>-<commit>-run.<id>` tag 发布不可变 prerelease。仓库写凭据只注入 GitHub API 和 Release 步骤，依赖安装与本地候选验证无法读取。
 
 Preview Release 只包含两个 macOS DMG、Windows setup 可执行文件及带目标前缀的审计材料。候选验证器按照已验证清单中的相对路径解析每个安装器和更新产物，包括位于 Windows maker 子目录内的 Squirrel 文件。生成清单或上传草稿前，发布流程会把路径片段转换为保守的 ASCII Release 资产名，并拒绝重名，防止 GitHub 静默改写资产名。它排除 macOS 更新 ZIP、Windows nupkg／`RELEASES`、Pages 输出以及全部 canary／stable 元数据。其内嵌构建身份为 `unsigned-preview`；应用不会创建原生 updater，**检查更新…** 会说明自动更新不可用，且 Preview 不能作为 canary 或 stable 晋级证据。
 
