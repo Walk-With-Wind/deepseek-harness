@@ -262,6 +262,20 @@ describe('Desktop CI workflow', () => {
     expect(JSON.stringify(jobs()['signed-release'])).toContain('DSH_DESKTOP_CRASH_RESTART_ACCEPTANCE')
   })
 
+  it('Windows 进程退出轮询允许目标 PID 分批消失', () => {
+    for (const path of [
+      'scripts/desktop-packaged-smoke.mjs',
+      'scripts/desktop-installed-data-smoke.mjs',
+    ]) {
+      const smoke = readFileSync(resolve(root, path), 'utf8')
+      expect(smoke).toContain(
+        "powershellJson('Get-Process -ErrorAction Stop | Select-Object Id | ConvertTo-Json -Compress')",
+      )
+      expect(smoke).toContain('return pids.filter(pid => alive.has(pid))')
+      expect(smoke).not.toContain("Get-Process -Id ${pids.join(',')} -ErrorAction SilentlyContinue")
+    }
+  })
+
   it('最终 maker 产物按平台安装、运行、卸载、重装并再次运行', () => {
     const installer = readFileSync(resolve(root, 'scripts/desktop-installer-smoke.mjs'), 'utf8')
     for (const name of ['unsigned-native', 'signed-release']) {

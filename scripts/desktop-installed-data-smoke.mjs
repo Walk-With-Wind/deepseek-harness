@@ -1053,8 +1053,11 @@ function requestGracefulShutdown() {
 function aliveProcessIds(pids) {
   if (pids.length === 0) return []
   if (process.platform === 'win32') {
-    return powershellJson(`Get-Process -Id ${pids.join(',')} -ErrorAction SilentlyContinue | Select-Object Id | ConvertTo-Json -Compress`)
-      .map(value => Number(value.Id))
+    const alive = new Set(
+      powershellJson('Get-Process -ErrorAction Stop | Select-Object Id | ConvertTo-Json -Compress')
+        .map(value => Number(value.Id)),
+    )
+    return pids.filter(pid => alive.has(pid))
   }
   return pids.filter((pid) => {
     try {

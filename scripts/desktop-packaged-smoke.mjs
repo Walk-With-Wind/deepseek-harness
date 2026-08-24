@@ -325,17 +325,21 @@ function assertProcessTreeExited(pids) {
 }
 
 function aliveProcessIds(pids) {
-  return platform === 'win32'
-    ? powershellJson(`Get-Process -Id ${pids.join(',')} -ErrorAction SilentlyContinue | Select-Object Id | ConvertTo-Json -Compress`)
-      .map(value => Number(value.Id))
-    : pids.filter((pid) => {
-        try {
-          process.kill(pid, 0)
-          return true
-        } catch {
-          return false
-        }
-      })
+  if (platform === 'win32') {
+    const alive = new Set(
+      powershellJson('Get-Process -ErrorAction Stop | Select-Object Id | ConvertTo-Json -Compress')
+        .map(value => Number(value.Id)),
+    )
+    return pids.filter(pid => alive.has(pid))
+  }
+  return pids.filter((pid) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  })
 }
 
 async function waitForProcessTreeExit(pids, timeoutMs) {
